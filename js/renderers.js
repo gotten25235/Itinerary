@@ -44,6 +44,11 @@ function renderGridGrouped(cached){
   out.innerHTML = '';
   const {groups} = groupByType(cached.header, cached.data);
   const imageField = detectImageField(cached.header);
+
+  // 嘗試偵測「網址」欄位（先找常見欄名）
+  const urlField = (cached.header || []).find(h => /網址|url|link|website/i.test(h)) || null;
+  const template = (document.getElementById('csvTemplate') || {}).value || '';
+
   Object.keys(groups).forEach(type => {
     const items = groups[type].slice(0,9);
     let html = '<div class="group">';
@@ -51,16 +56,61 @@ function renderGridGrouped(cached){
     html += '<div class="grid">';
     items.forEach(row => {
       const title = row[ cached.header.find(h=>/名稱|title|name/i.test(h)) || cached.header[0] ] || '';
-      const rawImg = row[imageField] || row['圖片'] || row['照片'] || row['img'] || row['網址'] || '';
+
+      // 圖片來源（仍用 detectImageField 的邏輯）
+      const rawImg = row[imageField] || row['圖片'] || row['照片'] || row['img'] || row['image'] || '';
       const imgUrl = makeSafeUrl(rawImg);
+
+      // 取網址欄位（優先用 urlField，接著常見 key）
+      let rawUrl = '';
+      if(urlField) rawUrl = row[urlField] || '';
+      rawUrl = rawUrl || row['網址'] || row['url'] || row['link'] || '';
+
+      // 如果網址是純數字且有 template，使用 buildUrlFromTemplate 產生真正連結
+      let finalLink = '';
+      if(/^[0-9]+$/.test((rawUrl||'').toString().trim()) && template){
+        finalLink = buildUrlFromTemplate(template, rawUrl.toString().trim());
+      } else {
+        finalLink = makeSafeUrl(rawUrl) || '';
+      }
+
+      // 取得價格欄位內容（保留你原本的檢測）
+      const priceField = (cached.header || []).find(h => /金額|價格|price/i.test(h));
+      const rawPrice = (priceField ? (row[priceField] || '') : '') || row['金額'] || row['價格'] || row['price'] || '';
+
       html += '<div class="grid-item">';
       if(imgUrl){
-        html += '<a href="'+escapeHtml(imgUrl)+'" target="_blank" rel="noopener" style="text-decoration:none;color:inherit">';
+        // 主要改在這：href 先用 finalLink（若為空才 fallback 回 imgUrl）
+        const href = finalLink && finalLink.toString().trim() !== '' ? finalLink : imgUrl;
+        html += '<a href="'+escapeHtml(href)+'" target="_blank" rel="noopener" style="text-decoration:none;color:inherit">';
         html += '<div class="grid-img" style="background-image:url('+escapeHtml(imgUrl)+')"></div>';
-        html += '<div class="grid-caption">'+escapeHtml(title)+'</div></a>';
+        // caption + 嵌入價格（若有）
+        html += '<div class="grid-caption">';
+        html += escapeHtml(title);
+        if(rawPrice && rawPrice.toString().trim() !== ''){
+          html += '<div class="grid-price" style="margin-top:6px;font-weight:600;color:var(--accent);font-size:13px;">' + escapeHtml(rawPrice) + '</div>';
+        }
+        html += '</div></a>';
       } else {
-        html += '<div class="placeholder">無圖片</div>';
-        html += '<div class="grid-caption">'+escapeHtml(title)+'</div>';
+        // 無圖片但有網址時也把整塊包成連結（否則僅顯示文字）
+        if(finalLink && finalLink.toString().trim() !== ''){
+          html += '<a href="'+escapeHtml(finalLink)+'" target="_blank" rel="noopener" style="text-decoration:none;color:inherit">';
+          html += '<div class="placeholder">無圖片（點我）</div>';
+          html += '<div class="grid-caption">';
+          html += escapeHtml(title);
+          if(rawPrice && rawPrice.toString().trim() !== ''){
+            html += '<div class="grid-price" style="margin-top:6px;font-weight:600;color:var(--accent);font-size:13px;">' + escapeHtml(rawPrice) + '</div>';
+          }
+          html += '</div></a>';
+        } else {
+          html += '<div class="placeholder">無圖片</div>';
+          html += '<div class="grid-caption">';
+          html += escapeHtml(title);
+          if(rawPrice && rawPrice.toString().trim() !== ''){
+            html += '<div class="grid-price" style="margin-top:6px;font-weight:600;color:var(--accent);font-size:13px;">' + escapeHtml(rawPrice) + '</div>';
+          }
+          html += '</div>';
+        }
       }
       html += '</div>';
     });
@@ -68,6 +118,9 @@ function renderGridGrouped(cached){
     out.insertAdjacentHTML('beforeend', html);
   });
 }
+
+
+
 
 /* List（每類型以表格顯示所有資料）*/
 function renderListGrouped(cached){
