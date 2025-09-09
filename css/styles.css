@@ -1,53 +1,248 @@
-/* Filename: css/styles.css */
-/* 所有註解為繁體中文。此檔為樣式表。 */
-:root{--accent:#1a73e8;--muted:#666}
-body{font-family:Arial,"Microsoft JhengHei",sans-serif;padding:14px;background:#fafafa;color:#222}
-h2{margin:0 0 12px 0}
-.controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px}
-.tmpl{flex:1;min-width:220px;padding:8px;border:1px solid #ddd;border-radius:6px;background:#fff}
-.gid{width:140px;padding:8px;border:1px solid #ddd;border-radius:6px;background:#fff}
-button{padding:8px 12px;border-radius:6px;border:1px solid #ccc;background:#fff;cursor:pointer}
-button.active{background:var(--accent);color:#fff;border-color:var(--accent)}
-.view-toggle{display:flex;gap:8px}
-.status-row{display:flex;justify-content:left;margin-bottom:10px}
-.status-box{padding:8px 12px;border-radius:6px;background:#fff;border:1px solid #eee;color:#333}
-.groups{margin-top:12px;display:flex;flex-direction:column;gap:26px}
-.group{background:transparent}
-.group h3{margin:0 0 8px 0;border-left:4px solid var(--accent);padding-left:10px;font-size:18px;color:#111}
-/* Grid */
-.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
-.grid-item{background:#fff;border:1px solid #eee;border-radius:8px;overflow:hidden;display:flex;flex-direction:column}
-.grid-img{width:100%;height:0;padding-bottom:66.666%;background-size:cover;background-position:center}
-.grid-caption{padding:8px;font-size:14px;color:#111}
-.placeholder{display:flex;align-items:center;justify-content:center;background:#f0f0f0;color:#999;height:160px}
-/* Table (list) */
-.table-wrap{overflow:auto;border:1px solid #eee;border-radius:6px;background:#fff}
-.table-wrap table{min-width:900px;border-collapse:collapse;width:100%}
-.table-wrap thead th{position:sticky;top:0;background:#fafafa;z-index:2;padding:8px;text-align:left;border-bottom:1px solid #e6e6e6}
-.table-wrap th, .table-wrap td{padding:8px;border:1px solid #f0f0f0;vertical-align:top}
-/* 固定寬度 */
-.col-type{width:90px}
-.col-studio{width:120px}
-.col-name{width:180px}
-.col-time{width:90px}
-.col-price{width:100px}
-/* 裁切 + 兩行 + ellipsis */
-.truncate {
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: normal;
-  max-width:100%;
-}
-.truncate.expanded {
-  -webkit-line-clamp: unset;
-  overflow: visible;
-}
-.more-btn { display:inline-block;margin-left:8px;color:var(--accent);cursor:pointer;font-size:13px }
-.link-cell a{color:var(--accent); text-decoration:underline}
-.small-text{font-size:13px;color:#444}
-.note{font-size:13px;color:var(--muted);margin-top:8px}
-@media (max-width:900px){ .grid{grid-template-columns:repeat(2,1fr)} .col-name{width:120px} .col-studio{width:90px} }
-@media (max-width:600px){ .grid{grid-template-columns:repeat(1,1fr)} .tmpl{width:100%} .gid{width:100%} }
+/* Filename: css/styles.css
+   完整樣式表（繁體中文註解）
+   功能重點：
+   - 圖片視圖：嚴格每行 3 個（3 × N），每欄固定寬度（--col-width），圖片等比例縮放置中
+   - 詳細清單：表格完整展開佔滿可用寬度，若過寬則出現水平捲軸
+   - 只對「網址」與「評論」欄位套用截斷（網址單行省略；評論多行省略），其他欄位完整顯示且允許換行
+   - 可透過 :root 變數快速調整格子大小 / 行高 / 顏色
+*/
+
+/* --------------------
+   變數區（可調整格子大小、顏色）
+   -------------------- */
+   :root{
+    --accent: #1a73e8;
+    --muted: #666;
+    --grid-gap: 12px;        /* 格子間距 */
+    --col-width: 320px;      /* 每欄固定寬度（調整此值改變欄寬） */
+    --row-height: 240px;     /* 圖片容器高度 */
+    --page-padding: 14px;
+    --card-bg: #fff;
+    --card-border: #eee;
+    --caption-min-height: 56px;
+    --link-max-width: 260px;   /* 在表格中網址顯示的最大寬度（單行省略） */
+    --comment-max-width: 360px;/* 評論欄的可見寬度（多行省略） */
+  }
+  
+  /* --------------------
+     Reset & 基本樣式
+     -------------------- */
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    font-family: Arial, "Microsoft JhengHei", sans-serif;
+    margin: var(--page-padding);
+    background: #fafafa;
+    color: #222;
+    -webkit-font-smoothing:antialiased;
+    -moz-osx-font-smoothing:grayscale;
+    line-height:1.4;
+  }
+  
+  /* 控制列 / 按鈕 / 狀態列 */
+  .controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+  .controls .tmpl, .controls .gid, .controls input[type="text"]{
+    padding:8px;border:1px solid #ddd;border-radius:6px;background:var(--card-bg)
+  }
+  button{
+    padding:8px 12px;border-radius:6px;border:1px solid #ccc;background:var(--card-bg);cursor:pointer;font-size:14px
+  }
+  button.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .status-row{display:flex;align-items:center;margin-bottom:10px}
+  .status-box{padding:8px 12px;border-radius:6px;background:var(--card-bg);border:1px solid #eee;color:#333}
+  
+  /* 小說明 / note */
+  .note{font-size:13px;color:var(--muted);margin-top:8px}
+  
+  /* --------------------
+     Group 與 標題（block flow）
+     - .group 為區塊（標題 + 內容垂直排列）
+     -------------------- */
+  .group{
+    display:block;
+    margin-bottom:20px;
+  }
+  .group h3{
+    margin:0 0 8px 0;
+    border-left:4px solid var(--accent);
+    padding-left:10px;
+    font-size:18px;
+    color:#111;
+  }
+  
+  /* --------------------
+     Grid（圖片網格）-- 明確放在 .grid 上
+     - 嚴格三欄：repeat(3, var(--col-width))
+     - 若視窗太窄，外層 .grid-container 會提供水平滾動
+     -------------------- */
+  .grid-container{
+    width:100%;
+    overflow-x:auto;               /* 視窗窄時水平滾動，保持三欄排列 */
+    -webkit-overflow-scrolling: touch;
+    padding-bottom:6px;
+  }
+  
+  /* 若你的 renderers 會輸出 .grid，確保 .grid 在 .grid-container 或 .group 內 */
+  .grid{
+    display: grid;
+    grid-template-columns: repeat(3, var(--col-width));
+    gap: var(--grid-gap);
+    align-items: start;
+    justify-content: start;
+    padding: 6px 0;
+    box-sizing: border-box;
+  }
+  
+  /* 每個格子 */
+  .grid-item{
+    box-sizing: border-box;
+    width: var(--col-width);
+    min-width: var(--col-width);
+    max-width: var(--col-width);
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: 8px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  
+  /* 圖片容器：固定高度，內容置中 */
+  .grid-img{
+    width:100%;
+    height: var(--row-height);
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    background:#f8f8f8;
+    overflow:hidden;
+  }
+  
+  /* 圖片本體：等比例縮放、置中 */
+  .grid-img img{
+    max-width:100%;
+    max-height:100%;
+    width:auto;
+    height:auto;
+    display:block;
+    object-fit: contain;   /* 要裁切改成 cover */
+    object-position: center;
+    user-select: none;
+    -webkit-user-drag: none;
+  }
+  
+  /* 標題 / caption */
+  .grid-caption{
+    padding:10px;
+    font-size:14px;
+    color:#111;
+    line-height:1.2;
+    min-height: var(--caption-min-height);
+    box-sizing:border-box;
+  }
+  
+  /* 價格 */
+  .grid-price{
+    margin-top:6px;
+    font-weight:600;
+    color:var(--accent);
+    font-size:13px;
+    padding:0 10px 10px 10px;
+  }
+  
+  /* 使整塊可點（移除 a 的預設樣式） */
+  .grid-item a{display:block;color:inherit;text-decoration:none}
+  
+  /* --------------------
+     詳細清單（table）
+     - table-wrap 能完整展開、水平捲軸可用
+     - 只有「網址」與「評論」欄位被截斷，其他欄位完整顯示並可換行
+     -------------------- */
+  .table-wrap{
+    overflow:auto;
+    border:1px solid var(--card-border);
+    border-radius:6px;
+    background:var(--card-bg);
+    margin-top:12px;
+  }
+  
+  /* 讓 table 可水平滾動（若寬度超過容器） */
+  .table-wrap table{
+    min-width:900px; /* 保留預設，如需自適應可改或移除 */
+    border-collapse:collapse;
+    width:100%;
+  }
+  .table-wrap thead th{
+    position:sticky;
+    top:0;
+    background:#fafafa;
+    z-index:2;
+    padding:8px;
+    text-align:left;
+    border-bottom:1px solid #e6e6e6;
+  }
+  .table-wrap th, .table-wrap td{
+    padding:8px;
+    border:1px solid #f0f0f0;
+    vertical-align:top;
+    white-space: normal;       /* 預設允許換行（除了特別指定的欄位） */
+    word-break: break-word;
+  }
+  
+  /* 欄位寬度提示（可依需求微調） */
+  .col-type{width:90px}
+  .col-studio{width:120px}
+  .col-name{width:180px}
+  .col-time{width:90px}
+  .col-price{width:100px}
+  
+  /* --------------------
+     專門針對「網址」與「評論」的截斷樣式
+     - .link-cell: 單行省略（title 屬性可顯示完整）
+     - .comment-cell: 多行（預設 2 行）省略，title 屬性顯示完整
+     -------------------- */
+  /* 網址欄：單行省略 */
+  .table-wrap .link-cell{
+    max-width: var(--link-max-width);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  
+  /* a 裡也要限制，並保留 title 屬性以 hover 顯示完整網址 */
+  .table-wrap .link-cell a{
+    display:inline-block;
+    max-width:100%;
+    overflow:hidden;
+    text-overflow:ellipsis;
+    white-space:nowrap;
+    color:var(--accent);
+    text-decoration:underline;
+  }
+  
+  /* 評論欄：多行省略（2 行） */
+  .table-wrap .comment-cell{
+    max-width: var(--comment-max-width);
+    display:-webkit-box;
+    -webkit-line-clamp:2;      /* 顯示行數 */
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: normal;
+  }
+  
+  /* 若你希望評論欄有「更多」按鈕，renderers.js 中會生成 .more-btn */
+  .more-btn{
+    display:inline-block;
+    margin-left:8px;
+    color:var(--accent);
+    cursor:pointer;
+    font-size:13px;
+  }
+  
+  /* 連結 cell 的小樣式（點擊顏色） */
+  .link-cell a:hover{opacity:0.9}
+  
+  /* 其它小輔助 */
+  .small-text{font-size:13px;color:#444}
+  

@@ -1,6 +1,11 @@
 類型,工作室,名稱,是否有NPC,人數,時間,金額,網址,地點,評論,圖片
-密室逃脫,Escapebar,見鬼,,4 - 8 人,120分鐘,假日：$1,https://escape.bar/game/24179,台北市中山區新生北路三段82號地下樓,
-密室逃脫,MissGAME,觀陰,,2 - 6 人,80 分鐘,3 人包場｜每人 TWD 733,https://www.myfunnow.com/zh-tw/products/3174118062171,台北市萬華區漢中街18 24號,
-密室逃脫,Escapebar,等人,,2 - 8 人,110 分鐘,假日4人：$800 / 人,https://escape.bar/game/8121,新北市中和區連城路52號4樓,
-美食,FoodStudio,小吃店A,,1 - 4 人,30 分鐘,平均 TWD 150,https://example.com/foodA,台中市西區民權路213巷11號,適合下午茶,https://pics.example.com/foodA.jpg
-美食,FoodStudio,小吃店B,,1 - 2 人,20 分鐘,平均 TWD 80,https://example.com/foodB,台中市北區錦西街28號,熱門小吃,https://pics.example.com/foodB.jpg
+密室逃脫,影子工坊,密室A,有,3 - 6 人,90 分鐘,平日：TWD 480 / 人,https://example.com/escapeA,台北市大安區和平東路100號,緊湊劇情與實景道具,https://pics.example.com/escapeA.jpg
+密室逃脫,午夜遊戲,密室B,,2 - 5 人,75 分鐘,假日：TWD 600 / 人,https://example.com/escapeB,新北市板橋區文化路50號,燈光設計很棒,https://pics.example.com/escapeB.jpg
+密室逃脫,迷宮屋,密室C,有,4 - 8 人,120 分鐘,包場價：TWD 3200,https://example.com/escapeC,台中市西區五權路88號,適合大型團體,https://pics.example.com/escapeC.jpg
+密室逃脫,古堡工作室,密室D,,2 - 4 人,60 分鐘,每人 TWD 550,https://example.com/escapeD,高雄市鹽埕區大勇路12號,懸疑氛圍強烈,https://pics.example.com/escapeD.jpg
+密室逃脫,紙箱計畫,密室E,有,3 - 7 人,100 分鐘,平日優惠：TWD 420 / 人,https://example.com/escapeE,台南市中西區海安路200巷,謎題偏邏輯，考驗團隊,https://pics.example.com/escapeE.jpg
+密室逃脫,綠葉密室,密室F,,2 - 6 人,85 分鐘,2 人包場 TWD 1400,https://example.com/escapeF,桃園市中壢區新生路58號,適合新手入門,https://pics.example.com/escapeF.jpg
+美食,街角食堂,小吃A,,1 - 3 人,20 分鐘,平均 TWD 80,https://example.com/foodA,台北市士林區文林路30巷,米飯香Q,https://pics.example.com/foodA.jpg
+美食,夜市小站,小吃B,,1 - 2 人,15 分鐘,平均 TWD 60,https://example.com/foodB,台中市北區育才街12號,炸物酥脆,https://pics.example.com/foodB.jpg
+美食,老街食坊,小吃C,,1 - 4 人,25 分鐘,人均 TWD 120,https://example.com/foodC,高雄市苓雅區青年一路,自製醬料好吃,https://pics.example.com/foodC.jpg
+
