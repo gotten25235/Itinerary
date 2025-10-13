@@ -18,15 +18,41 @@
 const DOC_ID = '1DuMk9-kPO_FmXGOyunTcGGC1Rquoova5Q6DCTr5Z_A8';
 
 const AppState = {
-  cached: null,          // { header: string[], data: object[], meta?: object }
-  currentView: 'raw',    // 'grid' | 'list' | 'schedule' | 'raw'
-  availableViews: [],    // 依模式動態生成
-  isLoading: false
+  cached: null,
+  currentView: 'raw',
+  availableViews: [],
+  isLoading: false,
+  flags: { hideDebug: false, hideImages: false }  // ★ 新增
 };
+
+// ★ 解析網址參數，支援 ?hide=debug,img 或 ?hideDebug=1&hideImages=1
+function applyUrlFlags() {
+  const p = new URLSearchParams(location.search);
+  const raw = (p.get('hide') || '').toLowerCase();
+  const list = raw.split(/[,\s]+/).filter(Boolean);     // e.g. "debug,ui"
+  const yes = (k) => list.includes(k) || p.get('hide' + k[0].toUpperCase() + k.slice(1)) === '1';
+
+  AppState.flags.hideDebug    = yes('debug');
+  AppState.flags.hideControls = yes('ui') || yes('controls') || yes('bar');
+
+  if (AppState.flags.hideControls) document.documentElement.classList.add('hide-controls');
+  // （你不想隱藏圖片，不加 hide-images）
+}
 
 /* ============ 小工具 / Debug ============ */
 
 function ensureDebugBox() {
+  // ★ 若要求隱藏 debug，建立一個隱藏的佔位 pre 並直接回傳
+  if (AppState?.flags?.hideDebug) {
+    let dbg = document.getElementById('debug');
+    if (!dbg) {
+      dbg = document.createElement('pre');
+      dbg.id = 'debug';
+      dbg.style.display = 'none';
+      (document.body || document.documentElement).appendChild(dbg);
+    }
+    return dbg;
+  }
   // 容器：<details id="debugPanel"><summary>…</summary><pre id="debug">…</pre></details>
   let panel = document.getElementById('debugPanel');
   if (!panel) {
@@ -207,23 +233,26 @@ async function loadFromText(csvText) {
     const rows = parseCSV(csvText);
     if (!rows || rows.length === 0) throw new Error('CSV 為空');
 
-    // step1: 只在真的像 meta 時才採用
+    // step1: 只在真的像 meta 時才採用；★ 同列第2欄之後全部合併為多行
     const meta = {};
     let cursor = 0;
     if (isMetaRow(rows[0])) {
       const k = String(rows[0][0] ?? '').trim();
-      const v = String(rows[0][1] ?? '').trim();
-      if (k) meta[k] = v;
+      const vals = (rows[0].slice(1) || []).map(x => String(x ?? '').trim()).filter(Boolean);
+      if (k && vals.length) meta[k] = vals.join('\n');
       cursor = 1;
     }
     if (isMetaRow(rows[1])) {
       const k = String(rows[1][0] ?? '').trim();
-      const v = String(rows[1][1] ?? '').trim();
-      if (k) meta[k] = v;
+      const vals = (rows[1].slice(1) || []).map(x => String(x ?? '').trim()).filter(Boolean);
+      if (k && vals.length) {
+        const joined = vals.join('\n');
+        meta[k] = meta[k] ? (meta[k] + '\n' + joined) : joined; // ★ 若同 key，再往後續接
+      }
       cursor = Math.max(cursor, 2);
     }
 
-    // step2: 決定 header 列
+    // step2: 決定 header 列（行程：找「時刻表/schedule」；否則：啟發式）
     const modeValue = (meta['模式'] || meta['mode'] || '').toString().trim();
     let headerIndex;
     if (/^行程$/i.test(modeValue)) {
@@ -269,6 +298,7 @@ async function loadFromText(csvText) {
     AppState.isLoading = false;
   }
 }
+
 
 /* ============ 範例載入（手動） ============ */
 async function loadSampleData() {
@@ -427,7 +457,27 @@ function initializeEventListeners() {
   if (loadSampleBtn) loadSampleBtn.addEventListener('click', () => loadSampleData());
 }
 
+// ★ 強制隱藏 controls + status（JS 層級，保證即時生效）
+function enforceHiddenControls() {
+  if (!AppState?.flags?.hideControls) return;
+  const selectors = [
+    '#csvTemplate', '#gidInput', '#openCsv', '#loadBtn', '#reloadBtn', '#loadSampleBtn',
+   '#status', '.status-row', '#controls', '.controls', '.controls-row',
+   '#title', '.app-title', '.app-header'   // 若你的 h1 有這些常見容器/ID，就直接隱藏
+  ];
+  selectors.forEach(sel => {
+    document.querySelectorAll(sel).forEach(el => { el.style.display = 'none'; });
+  });
+
+ // 沒有固定 ID 的情況：把文字是「試算表檢視器」的 h1 一起藏起來
+ document.querySelectorAll('h1').forEach(h => {
+   const t = (h.textContent || '').trim();
+   if (t === '試算表檢視器') h.style.display = 'none';
+ });
+}
+
 async function initializeApp() {
+  applyUrlFlags(); // ★ 先套用網址旗標
   const statusEl = document.getElementById('status');
   if (statusEl) statusEl.textContent = '尚未載入（請輸入 gid 或在模板欄貼含 gid= 的 URL，再按「載入資料」）';
 
@@ -442,7 +492,9 @@ async function initializeApp() {
 }
 
 window.addEventListener('DOMContentLoaded', () => {
+  applyUrlFlags();           // 先套旗標
   initializeEventListeners();
+  enforceHiddenControls();   // ★ 一進來就隱藏一次
   initializeApp();
 });
 

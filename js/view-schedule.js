@@ -71,7 +71,11 @@ function formatTimeMultiline(raw) {
 
   const metaNote = (cached?.meta && (cached.meta['備註'] || cached.meta['note'])) || '';
   let html = '<div class="schedule-container"><h2 class="schedule-title">行程</h2>';
-  if (metaNote) html += `<div class="schedule-meta-note">備註：${escapeHtml(String(metaNote))}</div>`;
+  if (metaNote) {
+    const lines = String(metaNote).split(/\n+/).map(s => s.trim()).filter(Boolean);
+    const bullets = lines.map(s => `*.${escapeHtml(s)}`).join('<br>');
+    html += `<div class="schedule-meta-note"><div class="meta-label">備註：</div>${bullets}</div>`;
+  }
   html += '<div class="schedule-layout">';
   sorted.forEach(item => {
     const time   = item[timeKey] || '';
@@ -130,7 +134,7 @@ function formatTimeMultiline(raw) {
   html += '</div>'; // schedule-layout
 
   // 底部斜線說明
-  html += `<div class="schedule-legend"><em>／ 藍色為必有行程．紅色為選擇行程 ／</em></div>`;
+  html += `<div class="schedule-legend"><em>／ <span class="legend-blue">藍色</span>為必有行程．<span class="legend-red">紅色</span>為選擇行程 ／</em></div>`;
   html += '</div>'; // schedule-container
 
   out.insertAdjacentHTML('beforeend', html);
@@ -166,7 +170,11 @@ function formatTimeMultiline(raw) {
       .schedule-image .img-placeholder { color:#9aa0a6; font-size:12px; letter-spacing:.1em; }
 
       .schedule-legend { margin-top: 8px; text-align: center; color: #6b7280; }
-      .schedule-legend em { font-style: italic; }
+      .schedule-legend em { font-style: italic; font-weight: 700; } /* 你剛加粗的規則 */
+      .schedule-legend .legend-blue { color: #2563eb; font-weight: 700; }
+      .schedule-legend .legend-red  { color: #ef4444; font-weight: 700; }
+
+      
 
       @media (max-width: 640px) {
         .schedule-item { grid-template-columns: 84px 1fr; }
