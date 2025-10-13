@@ -133,8 +133,8 @@ function renderSchedule(cached) {
       .schedule-item.link:hover { box-shadow: 0 6px 16px rgba(0,0,0,0.08); transform: translateY(-1px); transition: box-shadow .2s, transform .2s; }
 
       .schedule-time-section { display: flex; align-items: center; justify-content: center; }
-      .schedule-time-section { display: flex; align-items: center; justify-content: center; border-radius: 8px; }
-      .schedule-time-section.has-plus { background: #ef4444; color: #fff; } /* 含「+」→ 整個時間區塊紅底 */
+      .schedule-time-section { display: flex; align-items: center; justify-content: center; border-radius: 8px; background: #2563eb; color: #fff; } /* 預設藍底 */
+      .schedule-time-section.has-plus { background: #ef4444; color: #fff; } /* 含「+」→ 紅底 */
 
       /* 右側內容 + 更大圖：把右側圖片欄放大到 220px（手機時縮小） */
       .schedule-content-section { display: grid; grid-template-columns: 1fr 320px; gap: 14px; align-items: stretch; }
