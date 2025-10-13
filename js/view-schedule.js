@@ -44,6 +44,16 @@ function renderSchedule(cached) {
     return;
   }
 
+// 將 "20:00~21:30" 轉成三行的 HTML（開始 / ~ / 結束）
+function formatTimeMultiline(raw) {
+  const s = String(raw || '');
+  if (!s.includes('~')) return escapeHtml(s);        // 沒有 ~ 維持原樣
+  const [start, end] = s.split('~').map(x => x.trim());
+  const a = escapeHtml(start || '');
+  const b = escapeHtml(end || '');
+  return `<span class="t1">${a}</span><span class="tsep">~</span><span class="t2">${b}</span>`;
+}
+
   // 欄位對應
   const timeKey   = header[0]; // 左側時間 / 時刻表
   const typeKey   = pickField(header, ['類型','type','分類','category']);
@@ -90,7 +100,7 @@ function renderSchedule(cached) {
 
     // 左：時間
     html += `<div class="${timeSectionClasses.join(' ')}">`;
-    html += `  <div class="${timeClasses.join(' ')}">${escapeHtml(String(time))}</div>`;
+    html += `<div class="${timeClasses.join(' ')}">${formatTimeMultiline(time)}</div>`;
     html += '</div>';
 
     // 右：內容 + 更大圖片（加寬）

@@ -302,12 +302,17 @@
     padding: 20px 15px;
   }
 
-  .schedule-time {
-    font-size: 18px;
-    font-weight: bold;
-    text-align: center;
-    line-height: 1.2;
+  .schedule-time { 
+    display: flex; 
+    flex-direction: column; 
+    align-items: center; 
+    justify-content: center; 
+    line-height: 1.15;
   }
+  .schedule-time > span { display: block; }
+  .schedule-time .t1, .schedule-time .t2 { font-weight: 700; }
+  .schedule-time .tsep { opacity: .95; margin: 2px 0; }
+  
 
   /* 右邊內容區域 */
   .schedule-content-section {
@@ -433,4 +438,6 @@
       height: 120px;
     }
   }
+
+  
   
