@@ -69,7 +69,10 @@ function formatTimeMultiline(raw) {
     String(a[timeKey]||'').localeCompare(String(b[timeKey]||''))
   );
 
-  let html = '<div class="schedule-container"><h2 class="schedule-title">行程</h2><div class="schedule-layout">';
+  const metaNote = (cached?.meta && (cached.meta['備註'] || cached.meta['note'])) || '';
+  let html = '<div class="schedule-container"><h2 class="schedule-title">行程</h2>';
+  if (metaNote) html += `<div class="schedule-meta-note">備註：${escapeHtml(String(metaNote))}</div>`;
+  html += '<div class="schedule-layout">';
   sorted.forEach(item => {
     const time   = item[timeKey] || '';
     const typ    = typeKey ? (item[typeKey] || '') : '';

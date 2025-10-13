@@ -265,6 +265,12 @@
     font-weight: bold;
   }
 
+  .schedule-meta-note{
+    margin: 6px 0 10px;
+    color: #ff0080;
+    font-size: 20px;
+  }
+
   .schedule-layout {
     display: flex;
     flex-direction: column;
@@ -436,7 +442,7 @@
       flex: none;
       width: 100%;
       height: 120px;
-    }
+    }    
   }
 
   

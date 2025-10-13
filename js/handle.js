@@ -27,16 +27,50 @@ const AppState = {
 /* ============ 小工具 / Debug ============ */
 
 function ensureDebugBox() {
-  let dbg = document.getElementById('debug');
-  if (!dbg) {
-    dbg = document.createElement('pre');
+  // 容器：<details id="debugPanel"><summary>…</summary><pre id="debug">…</pre></details>
+  let panel = document.getElementById('debugPanel');
+  if (!panel) {
+    panel = document.createElement('details');
+    panel.id = 'debugPanel';
+    panel.open = false; // 預設收合
+    panel.style.cssText = 'margin-top:10px;border:1px solid #e5e7eb;border-radius:8px;background:#fff;';
+
+    const sum = document.createElement('summary');
+    sum.id = 'debugSummary';
+    sum.textContent = '📟 終端機 / Debug';
+    sum.style.cssText = 'cursor:pointer;user-select:none;padding:8px 10px;font-size:14px;font-weight:600;list-style:none;';
+    panel.appendChild(sum);
+
+    const dbg = document.createElement('pre');
     dbg.id = 'debug';
-    dbg.style.cssText = 'max-width:100%;overflow:auto;background:#111;color:#eee;padding:8px;border-radius:6px;font-size:12px;';
+    dbg.style.cssText = 'max-width:100%;overflow:auto;background:#0b1020;color:#e6edf3;margin:0;padding:10px;border-top:1px solid #e5e7eb;border-bottom-left-radius:8px;border-bottom-right-radius:8px;font-size:12px;white-space:pre-wrap;word-break:break-word;';
+    panel.appendChild(dbg);
+
     const out = document.getElementById('out');
     const host = out?.parentElement || document.body;
-    host.appendChild(dbg);
+    host.appendChild(panel);
+
+    // 追加一點點樣式（只插一次）
+    if (!document.getElementById('debug-style')) {
+      const s = document.createElement('style');
+      s.id = 'debug-style';
+      s.textContent = `
+        #debugPanel summary::-webkit-details-marker { display: none; }
+        #debugPanel summary::after {
+          content: '\\25BC';
+          float: right;
+          transition: transform .2s;
+        }
+        #debugPanel[open] summary::after { transform: rotate(180deg); }
+        #debugBadge {
+          display:inline-block; margin-left:8px; padding:0 6px; border-radius:999px;
+          background:#111827; color:#fff; font-size:12px; line-height:18px;
+        }
+      `;
+      document.head.appendChild(s);
+    }
   }
-  return dbg;
+  return document.getElementById('debug');
 }
 
 function logDebug(lines) {
@@ -45,7 +79,23 @@ function logDebug(lines) {
   const text = Array.isArray(lines) ? lines.join('\n') : String(lines || '');
   dbg.textContent = `[${ts}]\n${text}\n\n` + (dbg.textContent || '');
   console.log('[DEBUG]', text);
+
+  // 更新 summary 筆數徽章
+  const sum = document.getElementById('debugSummary');
+  if (sum) {
+    const existing = document.getElementById('debugBadge');
+    const count = (dbg.textContent.match(/\n\[/g) || []).length; // 粗估段落數
+    if (!existing) {
+      const b = document.createElement('span');
+      b.id = 'debugBadge';
+      b.textContent = count;
+      sum.appendChild(b);
+    } else {
+      existing.textContent = count;
+    }
+  }
 }
+  
 
 /** 是否像 CSV/TSV（至少兩行，某行含逗號或 tab） */
 function looksLikeDelimited(text) {
