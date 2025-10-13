@@ -225,10 +225,12 @@
     max-width: var(--comment-max-width);
     display:-webkit-box;
     -webkit-line-clamp:2;      /* 顯示行數 */
+    line-clamp: 2;             /* 標準屬性 */
     -webkit-box-orient: vertical;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: normal;
+    color: var(--accent);      /* 與網址使用相同顏色 */
   }
   
   /* 若你希望評論欄有「更多」按鈕，renderers.js 中會生成 .more-btn */
@@ -245,4 +247,190 @@
   
   /* 其它小輔助 */
   .small-text{font-size:13px;color:#444}
+
+  /* --------------------
+     時刻表模式樣式（左邊時間，右邊九宮格）
+     -------------------- */
+  .schedule-container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 20px;
+  }
+
+  .schedule-title {
+    text-align: center;
+    color: var(--accent);
+    margin-bottom: 30px;
+    font-size: 24px;
+    font-weight: bold;
+  }
+
+  .schedule-layout {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+
+  .schedule-item {
+    display: flex;
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+  }
+
+  .schedule-item:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+  }
+
+  .schedule-item.strike {
+    opacity: 0.6;
+    text-decoration: line-through;
+  }
+
+  /* 左邊時間區域 */
+  .schedule-time-section {
+    flex: 0 0 120px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--accent);
+    color: white;
+    padding: 20px 15px;
+  }
+
+  .schedule-time {
+    font-size: 18px;
+    font-weight: bold;
+    text-align: center;
+    line-height: 1.2;
+  }
+
+  /* 右邊內容區域 */
+  .schedule-content-section {
+    flex: 1;
+    display: flex;
+    padding: 20px;
+    gap: 15px;
+  }
+
+  /* 圖片區域 */
+  .schedule-image {
+    flex: 0 0 80px;
+    height: 80px;
+    border-radius: 8px;
+    overflow: hidden;
+    background: #f8f9fa;
+  }
+
+  .schedule-image img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+
+  /* 資訊區域 */
+  .schedule-info {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .schedule-type {
+    font-size: 12px;
+    color: #666;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-weight: 500;
+  }
+
+  .schedule-name {
+    font-size: 16px;
+    font-weight: 600;
+    color: #333;
+    line-height: 1.4;
+    margin-bottom: 4px;
+  }
+
+  .schedule-location {
+    font-size: 14px;
+    color: #666;
+    line-height: 1.3;
+  }
+
+  .schedule-details {
+    font-size: 13px;
+    color: #555;
+    padding: 6px 10px;
+    background: #f8f9fa;
+    border-radius: 4px;
+    border-left: 3px solid var(--accent);
+  }
+
+  .schedule-comment {
+    font-size: 14px;
+    color: var(--accent);
+    line-height: 1.4;
+  }
+
+  .schedule-note {
+    font-size: 13px;
+    color: #888;
+    font-style: italic;
+  }
+
+  .schedule-note em {
+    color: #666;
+  }
+
+  .schedule-url {
+    margin-top: 8px;
+  }
+
+  .schedule-url a {
+    display: inline-block;
+    padding: 6px 12px;
+    background: var(--accent);
+    color: white;
+    text-decoration: none;
+    border-radius: 4px;
+    font-size: 13px;
+    transition: background-color 0.2s ease;
+  }
+
+  .schedule-url a:hover {
+    background: #1557b0;
+  }
+
+  /* 響應式設計 */
+  @media (max-width: 768px) {
+    .schedule-container {
+      padding: 15px;
+    }
+    
+    .schedule-item {
+      flex-direction: column;
+    }
+    
+    .schedule-time-section {
+      flex: none;
+      padding: 15px;
+    }
+    
+    .schedule-content-section {
+      flex-direction: column;
+      padding: 15px;
+      gap: 10px;
+    }
+    
+    .schedule-image {
+      flex: none;
+      width: 100%;
+      height: 120px;
+    }
+  }
   

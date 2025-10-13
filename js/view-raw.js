@@ -1,21 +1,9 @@
-// filename: js/renderers.js
+// filename: js/view-raw.js
 'use strict';
 
 /**
- * ====== 目前只啟用「原始讀取」視圖 ======
- * 其餘視圖（grid/list/schedule/inspect）先保留空函式，避免干擾。
- */
-
-/** 原始讀取：直接顯示 header 與前 N 筆資料（表格 + JSON） */
-/**
- * 原始讀取：直接顯示 meta（模式/備註）、表頭與資料本體
- * - 不做任何欄位推斷或過濾
- * - 先渲染 meta（若存在），再渲染表格預覽，最後附上 JSON 節錄
- * 
- * @param {Object} cached
- * @param {Array<string>} cached.header  CSV 的表頭陣列
- * @param {Array<Object>} cached.data    以表頭鍵組成的資料列陣列
- * @param {Object} [cached.meta]         來自前兩列的「模式 / 備註」等資訊（可選）
+ * 原始讀取：顯示 meta（模式/備註）＋ 表頭＋資料
+ * 不做推斷與過濾
  */
 function renderRaw(cached) {
   const out = document.getElementById('out');
@@ -52,21 +40,16 @@ function renderRaw(cached) {
     return;
   }
 
-  // 表格預覽（限制筆數避免 DOM 過大）
+  // 表格預覽（限制筆數）
   const maxRows = Math.min(100, data.length);
   let html = '';
 
   html += '<div class="group">';
   html += `<h3>原始表格預覽（顯示前 ${maxRows} / 共 ${data.length} 筆）</h3>`;
   html += '<div class="table-wrap"><table><thead><tr>';
-
-  // 表頭
-  header.forEach(h => {
-    html += `<th>${escapeHtml(String(h))}</th>`;
-  });
+  header.forEach(h => { html += `<th>${escapeHtml(String(h))}</th>`; });
   html += '</tr></thead><tbody>';
 
-  // 資料列
   for (let i = 0; i < maxRows; i++) {
     const row = data[i] || {};
     html += '<tr>';
@@ -81,7 +64,7 @@ function renderRaw(cached) {
   html += '</tbody></table></div>';
   html += '</div>';
 
-  // JSON 節錄（便於核對解析是否正確）
+  // JSON 節錄
   const jsonPreviewCount = Math.min(20, data.length);
   const jsonText = escapeHtml(JSON.stringify(data.slice(0, jsonPreviewCount), null, 2));
   html += '<div class="group">';
@@ -92,16 +75,4 @@ function renderRaw(cached) {
   out.insertAdjacentHTML('beforeend', html);
 }
 
-
-/** 以下為保留的空函式（先不實作，避免影響最小可動版本） */
-function renderGridGrouped(_cached)   { /* TODO: 未實作 */ }
-function renderListGrouped(_cached)   { /* TODO: 未實作 */ }
-function renderScheduleMode(_cached)  { /* TODO: 未實作（行程） */ }
-function renderInspectView(_cached)   { /* TODO: 未實作（驗收/Inspect） */ }
-
-/** 匯出 */
 window.renderRaw = renderRaw;
-window.renderGridGrouped   = renderGridGrouped;
-window.renderListGrouped   = renderListGrouped;
-window.renderScheduleMode  = renderScheduleMode;
-window.renderInspectView   = renderInspectView;
