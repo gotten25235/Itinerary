@@ -54,6 +54,15 @@ function formatTimeMultiline(raw) {
   return `<span class="t1">${a}</span><span class="tsep">~</span><span class="t2">${b}</span>`;
 }
 
+function formatPrice(raw) {
+  const s = String(raw || '').trim();
+  if (!s) return '';
+  // 已含幣別就不再加：$, NT$, NT＄, ¥/￥, €, £
+  const hasSymbol = /^(\$|€|£|¥|￥|NT\$?|NT[＄$]?)/i.test(s);
+  return hasSymbol ? s : `$${s}`;
+}
+
+
   // 欄位對應
   const timeKey   = header[0]; // 左側時間 / 時刻表
   const typeKey   = pickField(header, ['類型','type','分類','category']);
@@ -116,7 +125,7 @@ function formatTimeMultiline(raw) {
     if (typ)   html += `    <div class="schedule-type">${escapeHtml(String(typ))}</div>`;
     if (name)  html += `    <div class="${nameClasses.join(' ')}">${escapeHtml(String(name))}</div>`;
     if (loc)   html += `    <div class="schedule-location">${escapeHtml(String(loc))}</div>`;
-    if (price) html += `    <div class="schedule-price"><strong>${escapeHtml(String(price))}</strong></div>`; // 藍色粗體
+    if (price) html += `    <div class="schedule-price"><strong>${escapeHtml(formatPrice(price))}</strong></div>`; // 藍色粗體（前加 $
     if (note)  html += `    <div class="schedule-note">${escapeHtml(String(note))}</div>`;                   // 紅色
     html += '  </div>';
 
