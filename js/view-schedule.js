@@ -69,6 +69,7 @@ function formatPrice(raw) {
   const nameKey   = pickField(header, ['名稱','name','title','主題']) || header[1] || header[0];
   const locKey    = pickField(header, ['地點','location','地址']);
   const priceKey  = pickField(header, ['金額','price','費用']);
+  const hoursKey  = pickField(header, ['營業時間','營業時段','hours','opening hours','open hours']);
   const cmtKey    = pickField(header, ['評論','review','reviews','評價']);
   const imgKey    = pickField(header, ['圖片','圖片網址','照片','image','img','thumbnail','photo','pic','圖']);
   const noteKey   = pickField(header, ['備註','note']); // 行內備註（非 meta）
@@ -80,10 +81,12 @@ function formatPrice(raw) {
 
   const metaNote = (cached?.meta && (cached.meta['備註'] || cached.meta['note'])) || '';
   let html = '<div class="schedule-container"><h2 class="schedule-title">行程</h2>';
+  const metaDate = (cached?.meta && (cached.meta['日期'] || cached.meta['date'])) || '';
+  if (metaDate) html += `<div class="schedule-date">日期：${escapeHtml(String(metaDate))}</div>`;
   if (metaNote) {
-    const lines = String(metaNote).split(/\n+/).map(s => s.trim()).filter(Boolean);
-    const bullets = lines.map(s => `*.${escapeHtml(s)}`).join('<br>');
-    html += `<div class="schedule-meta-note"><div class="meta-label">備註：</div>${bullets}</div>`;
+      const lines = String(metaNote).split(/\n+/).map(s => s.trim()).filter(Boolean);
+      const bullets = lines.map(s => `*.${escapeHtml(s)}`).join('<br>');
+      html += `<div class="schedule-meta-note"><div class="meta-label">備註：</div>${bullets}</div>`;
   }
   html += '<div class="schedule-layout">';
   sorted.forEach(item => {
@@ -92,6 +95,7 @@ function formatPrice(raw) {
     const name   = item[nameKey] || '';
     const loc    = locKey ? (item[locKey] || '') : '';
     const price  = priceKey ? (item[priceKey] || '') : '';
+    const hours  = hoursKey ? (item[hoursKey] || '') : '';
     const review = cmtKey ? (item[cmtKey] || '') : '';
     const note   = noteKey ? (item[noteKey] || '') : '';
     const img    = imgKey ? firstImageUrl(item[imgKey]) : '';
@@ -113,6 +117,11 @@ function formatPrice(raw) {
     const end   = clickable ? `</a>` : `</div>`;
 
     html += start;
+
+    // 頂欄：營業時間（靠右），底下黑色實線
+    if (hours) {
+      html += `<div class="schedule-topbar"><span class="topbar-label">營業時間：</span>${escapeHtml(String(hours))}</div>`;
+    }
 
     // 左：時間
     html += `<div class="${timeSectionClasses.join(' ')}">`;
@@ -154,6 +163,19 @@ function formatPrice(raw) {
     const s = document.createElement('style');
     s.id = styleId;
     s.textContent = `
+      /* 頂欄（營業時間） */
+      .schedule-topbar {
+        grid-column: 1 / -1;              /* 橫跨整張卡片 */
+        display: flex;
+        justify-content: flex-end;        /* 文字靠右 */
+        align-items: center;
+        padding: 4px 6px 6px;
+        font-size: 12px;
+        color: #374151;
+        border-bottom: 2px solid rgba(0,0,0,0.15);    /* 淺灰、透明度 15% */
+      }
+      .schedule-topbar .topbar-label { color: #6b7280; margin-right: 4px; }
+      .schedule-date { text-align:center; margin:2px 0 8px; font-weight:700; }
       .schedule-layout { display: flex; flex-direction: column; gap: 12px; }
       .schedule-item { display: grid; grid-template-columns: 100px 1fr; gap: 14px; padding: 12px; border: 1px solid #eee; border-radius: 12px; background: #fff; color: inherit; text-decoration: none; }
       .schedule-item.link:hover { box-shadow: 0 6px 16px rgba(0,0,0,0.08); transform: translateY(-1px); transition: box-shadow .2s, transform .2s; }

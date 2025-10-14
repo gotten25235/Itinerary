@@ -417,65 +417,50 @@
     background: #1557b0;
   }
 
-  /* 響應式設計 */
-  @media (max-width: 768px) {
-    .schedule-container {
-      padding: 15px;
-    }
-    
-    .schedule-item {
-      flex-direction: column;
-    }
-    
-    .schedule-time-section {
-      flex: none;
-      padding: 15px;
-    }
-    
-    .schedule-content-section {
-      flex-direction: column;
-      padding: 15px;
-      gap: 10px;
-    }
-    
-    .schedule-image {
-      flex: none;
-      width: 100%;
-      height: 120px;
-    } 
-    
-/* 只隱藏「行程檢視右側圖片」，不動圖片九宮格視圖 */
-.hide-images .schedule-image{display:none !important;}
-.hide-images .schedule-content-section{grid-template-columns:1fr !important;} /* 把右側欄收回 */
+  /* 行程：日期（標題下方）— 全域 */
+.schedule-date{
+  text-align: center;
+  margin: 2px 0 8px;
+  font-weight: 700;
+}
 
-    /* 隱藏上方控制列（含 #status 與可能的外層容器） */
+/* 斜線說明：關鍵字著色與加粗（全域） */
+.schedule-legend { margin-top: 8px; text-align: center; color: #6b7280; }
+.schedule-legend em { font-style: italic; font-weight: 700; }
+.schedule-legend .legend-blue { color: #2563eb; font-weight: 700; }
+.schedule-legend .legend-red  { color: #ef4444; font-weight: 700; }
+
+/* ===== URL 旗標（全域；不要放在 media 裡） ===== */
+
+/* 你說不隱藏任何圖片九宮格 → 不加入 .grid 的隱藏規則 */
+/* 只在「行程視圖」隱藏右側圖片（若未使用就不影響畫面） */
+.hide-images .schedule-image{ display:none !important; }
+.hide-images .schedule-content-section{ grid-template-columns: 1fr !important; }
+
+/* 隱藏上方控制列（含 #status 與常見外層容器） */
 .hide-controls #csvTemplate,
 .hide-controls #gidInput,
 .hide-controls #openCsv,
 .hide-controls #loadBtn,
 .hide-controls #reloadBtn,
 .hide-controls #loadSampleBtn,
-.hide-controls #status{display:none !important;}
+.hide-controls #status { display: none !important; }
 
 .hide-controls #controls,
 .hide-controls .controls,
 .hide-controls .controls-row,
-.hide-controls .status-row{display:none !important;}
+.hide-controls .status-row { display: none !important; }
 
-/* ==============================
-   8) 簡易 RWD（更多手機優化放在 js/schedule-mobile.js）
-   ============================== */
+/* ===== 響應式設計 ===== */
 @media (max-width: 1024px){
-  .schedule-item{grid-template-columns:84px 1fr}
-  .schedule-content-section{grid-template-columns:1fr 260px}
+  /* 若你有用 view-schedule.js 注入 grid 版行程卡，這段提供平板上的寬度微調 */
+  .schedule-item { grid-template-columns: 84px 1fr; }
+  .schedule-content-section { grid-template-columns: 1fr 260px; }
 }
+
 @media (max-width: 768px){
-  /* 手機實際的版面覆蓋由 js/schedule-mobile.js 注入；這裡保持輕量 */
-  .grid{--grid-col: 2}
+  /* 手機視圖主要由 js/schedule-mobile.js 覆蓋；這裡維持輕量設定 */
+  .grid { --grid-col: 2; }
+}
 
-
-  }
-  }
-
-  
   

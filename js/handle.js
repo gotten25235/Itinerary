@@ -157,9 +157,12 @@ function buildUrlFromTemplate(template, gid) {
 
 // 判斷一列是否為「meta 格式」（第一格是 模式/備註/mode）
 function isMetaRow(row) {
-  if (!Array.isArray(row) || row.length === 0) return false;
-  const k = String(row[0] ?? '').trim();
-  return k === '模式' || k === '備註' || k.toLowerCase() === 'mode';
+  const k = String(row?.[0] ?? '').trim().toLowerCase();
+  if (!k) return false;
+  // 將「日期」一併視為 meta
+  return ['模式','mode','備註','note','日期','date'].some(
+    key => key.toLowerCase() === k
+  );
 }
 
 // 行程用：找含「時刻表 / schedule」那列；找不到回 0
@@ -233,24 +236,23 @@ async function loadFromText(csvText) {
     const rows = parseCSV(csvText);
     if (!rows || rows.length === 0) throw new Error('CSV 為空');
 
-    // step1: 只在真的像 meta 時才採用；★ 同列第2欄之後全部合併為多行
-    const meta = {};
-    let cursor = 0;
-    if (isMetaRow(rows[0])) {
-      const k = String(rows[0][0] ?? '').trim();
-      const vals = (rows[0].slice(1) || []).map(x => String(x ?? '').trim()).filter(Boolean);
-      if (k && vals.length) meta[k] = vals.join('\n');
-      cursor = 1;
-    }
-    if (isMetaRow(rows[1])) {
-      const k = String(rows[1][0] ?? '').trim();
-      const vals = (rows[1].slice(1) || []).map(x => String(x ?? '').trim()).filter(Boolean);
-      if (k && vals.length) {
-        const joined = vals.join('\n');
-        meta[k] = meta[k] ? (meta[k] + '\n' + joined) : joined; // ★ 若同 key，再往後續接
-      }
-      cursor = Math.max(cursor, 2);
-    }
+        // step1: 連續掃前幾列的 meta（含：模式/備註/日期…）
+        // 規則：像 meta 的列 => 第 2 欄起全部用 '\n' 併成多行；同 key 續接
+        const meta = {};
+        let cursor = 0;
+        for (let i = 0; i < Math.min(rows.length, 6); i++) { // 掃前 6 列足夠
+          if (!isMetaRow(rows[i])) break;
+          const k = String(rows[i][0] ?? '').trim();
+          const vals = (rows[i].slice(1) || [])
+            .map(x => String(x ?? '').trim())
+            .filter(Boolean);
+          if (k && vals.length) {
+            const joined = vals.join('\n');
+            meta[k] = meta[k] ? (meta[k] + '\n' + joined) : joined;
+          }
+          cursor = i + 1;
+        }
+    
 
     // step2: 決定 header 列（行程：找「時刻表/schedule」；否則：啟發式）
     const modeValue = (meta['模式'] || meta['mode'] || '').toString().trim();
