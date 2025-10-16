@@ -133,7 +133,9 @@ function formatPrice(raw) {
     html += '  <div class="schedule-info">';
     if (typ)   html += `    <div class="schedule-type">${escapeHtml(String(typ))}</div>`;
     if (name)  html += `    <div class="${nameClasses.join(' ')}">${escapeHtml(String(name))}</div>`;
-    if (loc)   html += `    <div class="schedule-location">${escapeHtml(String(loc))}</div>`;
+    if (loc) html += `    <div class="schedule-location copy-addr"
+                                  data-copy="${escapeHtml(String(loc))}"
+                                  title="點一下複製地點">${escapeHtml(String(loc))}</div>`;
     if (price) html += `    <div class="schedule-price"><strong>${escapeHtml(formatPrice(price))}</strong></div>`; // 藍色粗體（前加 $
     if (note)  html += `    <div class="schedule-note">${escapeHtml(String(note))}</div>`;                   // 紅色
     html += '  </div>';
@@ -156,6 +158,48 @@ function formatPrice(raw) {
   html += '</div>'; // schedule-container
 
   out.insertAdjacentHTML('beforeend', html);
+  // 只綁一次的事件代理，點 .copy-addr 就複製地址
+if (!out._bindCopyAddr) {
+     out.addEventListener('click', async (e) => {
+        const el = e.target.closest('.copy-addr');
+        if (!el) return;
+       // ★ 關鍵：避免點到父層 <a> 導航（評論網址）
+       e.preventDefault();
+       e.stopPropagation();
+    
+        const text = (el.dataset.copy || el.textContent || '').trim();
+        if (!text) return;
+    
+        try {
+          if (navigator.clipboard?.writeText) {
+            await navigator.clipboard.writeText(text);
+          } else {
+            const ta = document.createElement('textarea');
+            ta.value = text; document.body.appendChild(ta);
+            ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
+          }
+          showCopyToast('已複製地點');
+        } catch {
+          showCopyToast('複製失敗');
+        }
+  });
+}
+
+// 小提示
+function showCopyToast(msg){
+  let t = document.getElementById('copy-toast');
+  if (!t) {
+    t = document.createElement('div');
+    t.id = 'copy-toast';
+    t.className = 'copy-toast';
+    document.body.appendChild(t);
+  }
+  t.textContent = msg || '已複製';
+  t.classList.add('show');
+  clearTimeout(showCopyToast._timer);
+  showCopyToast._timer = setTimeout(() => t.classList.remove('show'), 1200);
+}
+
 
   // 樣式（一次性）
   const styleId = 'schedule-style-v3';
@@ -163,56 +207,95 @@ function formatPrice(raw) {
     const s = document.createElement('style');
     s.id = styleId;
     s.textContent = `
-      /* 頂欄（營業時間） */
-      .schedule-topbar {
-        grid-column: 1 / -1;              /* 橫跨整張卡片 */
-        display: flex;
-        justify-content: flex-end;        /* 文字靠右 */
-        align-items: center;
-        padding: 4px 6px 6px;
-        font-size: 12px;
-        color: #374151;
-        border-bottom: 2px solid rgba(0,0,0,0.15);    /* 淺灰、透明度 15% */
-      }
-      .schedule-topbar .topbar-label { color: #6b7280; margin-right: 4px; }
-      .schedule-date { text-align:center; margin:2px 0 8px; font-weight:700; }
-      .schedule-layout { display: flex; flex-direction: column; gap: 12px; }
-      .schedule-item { display: grid; grid-template-columns: 100px 1fr; gap: 14px; padding: 12px; border: 1px solid #eee; border-radius: 12px; background: #fff; color: inherit; text-decoration: none; }
-      .schedule-item.link:hover { box-shadow: 0 6px 16px rgba(0,0,0,0.08); transform: translateY(-1px); transition: box-shadow .2s, transform .2s; }
+    /* ========= 基本排版 ========= */
+    .schedule-container{ --sched-img-w: 480px; }          /* 桌面右欄寬：想更大改這裡 */
+    .schedule-title{ margin:0 0 4px 0; font-size:20px; text-align:center; }
+    .schedule-date{ text-align:center; margin:2px 0 8px; font-weight:700; }
+    .schedule-meta-note{ margin:6px 0 10px; color:#6b7280; font-size:13px; }
+    .schedule-legend{ margin-top:8px; text-align:center; color:#6b7280; }
+    .schedule-legend em{ font-style:italic; font-weight:700; }
+    .schedule-legend .legend-blue{ color:#2563eb; font-weight:700; }
+    .schedule-legend .legend-red{ color:#ef4444; font-weight:700; }
+  
+    .schedule-layout{ display:flex; flex-direction:column; gap:12px; }
+    .schedule-item{
+      display:grid;
+      grid-template-columns:100px 1fr;     /* 左：時間  右：內容 */
+      gap:14px; padding:12px;
+      border:1px solid #eee; border-radius:12px; background:#fff;
+      color:inherit; text-decoration:none;
+    }
+    .schedule-item.link:hover{ box-shadow:0 6px 16px rgba(0,0,0,.08); transform:translateY(-1px); transition:.2s; }
+  
+    /* ========= 左側時間 ========= */
+    .schedule-time-section{ display:flex; align-items:center; justify-content:center; border-radius:8px; background:#2563eb; color:#fff; }
+    .schedule-time-section.has-plus{ background:#ef4444; color:#fff; }
+    .schedule-time{ font-weight:700; font-size:18px; padding:6px 10px; }
+    .schedule-time{ display:flex; flex-direction:column; align-items:center; justify-content:center; line-height:1.15; }
+    .schedule-time > span{ display:block; }
+    .schedule-time .t1,.schedule-time .t2{ font-weight:700; }
+    .schedule-time .tsep{ opacity:.95; margin:2px 0; }
+  
+    /* ========= 頂欄（營業時間） ========= */
+    .schedule-topbar{
+      grid-column:1 / -1;
+      display:flex; justify-content:flex-end; align-items:center;
+      padding:4px 6px 6px; font-size:12px; color:#374151;
+      border-bottom:2px solid rgba(0,0,0,.15);  /* 高透明度灰色 */
+    }
+    .schedule-topbar .topbar-label{ color:#6b7280; margin-right:4px; }
+  
+    /* ========= 右側內容 + 圖片（桌面） ========= */
+    .schedule-content-section{
+      display:grid;
+      grid-template-columns:1fr var(--sched-img-w);  /* 右圖欄寬 */
+      gap:12px; align-items:stretch;
+    }
+    .schedule-info{ display:flex; flex-direction:column; gap:4px; min-width:0; }
+    .schedule-type{ font-size:12px; color:#6b7280; text-transform:uppercase; letter-spacing:.05em; }
+    .schedule-name{ font-size:17px; font-weight:700; }
+    .schedule-name.is-required{ color:#2563eb; }
+    .schedule-name.is-optional{ color:#ef4444; }
+    .schedule-location{ font-size:13px; color:#374151; }
+    .schedule-price{ color:#2563eb; font-weight:700; }   /* 金額藍色粗體 */
+    .schedule-note{ color:#ef4444; font-size:13px; }     /* 行內備註紅色 */
+  
+    /* 右側圖片容器（桌面）：4:3 比例，解鎖任何 80px 限制 */
+    .schedule-item .schedule-content-section .schedule-image{
+      aspect-ratio:4 / 3;
+      background:#f3f4f6; border-radius:10px; overflow:hidden;
+      display:flex; align-items:center; justify-content:center;
+      width:100% !important; min-width:0 !important; max-width:none !important; height:auto !important;
+    }
+    .schedule-item .schedule-content-section .schedule-image.img-error::after{ content:'圖片載入失敗'; color:#999; font-size:12px; }
+    .schedule-item .schedule-content-section .schedule-image .img-placeholder{ color:#9aa0a6; font-size:12px; letter-spacing:.1em; }
+    .schedule-item .schedule-content-section .schedule-image img{
+      width:100% !important; height:100% !important; object-fit:cover; display:block;
+      max-width:none !important; max-height:none !important;
+    }
 
-      .schedule-time-section { display: flex; align-items: center; justify-content: center; }
-      .schedule-time-section { display: flex; align-items: center; justify-content: center; border-radius: 8px; background: #2563eb; color: #fff; } /* 預設藍底 */
-      .schedule-time-section.has-plus { background: #ef4444; color: #fff; } /* 含「+」→ 紅底 */
+    /* 可點複製的地點樣式與提示 */
+    .copy-addr{ cursor:pointer; position:relative; }
+    .copy-addr:active{ transform:scale(0.99); }
 
-      /* 右側內容 + 更大圖：把右側圖片欄放大到 220px（手機時縮小） */
-      .schedule-content-section { display: grid; grid-template-columns: 1fr 320px; gap: 14px; align-items: stretch; }
-      .schedule-info { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-      .schedule-type { font-size: 12px; color: #6b7280; text-transform: uppercase; letter-spacing: .05em; }
-      .schedule-name { font-size: 17px; font-weight: 700; }
-      .schedule-name.is-required { color: #2563eb; }  /* 藍色：必有行程 */
-      .schedule-name.is-optional { color: #ef4444; }  /* 紅色：選擇行程 */
-      .schedule-location { font-size: 13px; color: #374151; }
-      .schedule-price { color: #2563eb; font-weight: 700; }  /* 既有規則：金額藍色粗體 */
-      .schedule-note { color: #ef4444; font-size: 13px; }    /* 既有規則：行內備註紅色 */
-
-      .schedule-image { aspect-ratio: 1 / 1; background: #f3f4f6; border-radius: 12px; overflow: hidden; display: flex; align-items: center; justify-content: center; }
-      .schedule-image img { width: 100%; height: 100%; object-fit: cover; display: block; }
-      .schedule-image.img-error::after { content:'圖片載入失敗'; color:#999; font-size:12px; }
-      .schedule-image .img-placeholder { color:#9aa0a6; font-size:12px; letter-spacing:.1em; }
-
-      .schedule-legend { margin-top: 8px; text-align: center; color: #6b7280; }
-      .schedule-legend em { font-style: italic; font-weight: 700; } /* 你剛加粗的規則 */
-      .schedule-legend .legend-blue { color: #2563eb; font-weight: 700; }
-      .schedule-legend .legend-red  { color: #ef4444; font-weight: 700; }
-
-      
-
-      @media (max-width: 640px) {
-        .schedule-item { grid-template-columns: 84px 1fr; }
-        .schedule-content-section { grid-template-columns: 1fr 180px; }
-        .schedule-time { font-size: 16px; padding: 4px 8px; }
-      }
-    `;
+    /* 複製完成的小提示 */
+    .copy-toast{
+      position:fixed; z-index:9999; top:14px; right:14px;
+      background:rgba(17,24,39,.92); color:#fff;
+      padding:8px 12px; border-radius:10px; font-size:13px;
+      box-shadow:0 8px 20px rgba(0,0,0,.18);
+      opacity:0; transform:translateY(-6px);
+      transition:opacity .2s, transform .2s;
+    }
+    .copy-toast.show{ opacity:1; transform:translateY(0); }
+  
+    /* ========= RWD：你指定的手機版樣式維持不變 ========= */
+    @media (max-width: 640px) {
+      .schedule-item { grid-template-columns: 84px 1fr; }
+      .schedule-content-section { grid-template-columns: 1fr 180px; }  /* ★ 這段照你的要求「不變」 */
+      .schedule-time { font-size: 16px; padding: 4px 8px; }
+    }
+  `;
     document.head.appendChild(s);
   }
 }

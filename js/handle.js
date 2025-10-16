@@ -7,11 +7,12 @@
  * - gid 來源：優先用輸入框；若空，從模板字串（可貼 edit URL）抓 gid
  * - 匯出 URL: https://docs.google.com/spreadsheets/d/{DOC_ID}/export?format=csv&gid={gid}
  * - 解析：
- *   * 只有「第1/2列真的像 meta（模式/備註/mode）」才當 meta，否則不跳過
+ *   * 只有「前幾列真的像 meta（模式/備註/日期/…）」才當 meta，否則不跳過
  *   * 行程模式：找含「時刻表/schedule」那列當 header
  *   * 其他模式：不靠關鍵字，純啟發式偵測最像表頭的一列
  * - 視圖：模式=行程 -> ['schedule','list','raw']（預設 schedule），否則 ['grid','list','raw']（預設 grid）
  * - 失敗不自動 fallback 範例；需按「載入範例」才讀 sample.csv
+ * - ★ 新增：若 meta 有「日程表」欄（放多個 gid），在 行程 / 詳細清單 / 原始讀取 顯示「上一頁／下一頁（第N天）」分頁列，點擊會切換 gid 並重載
  */
 
 // ★ 將你的 Spreadsheet Doc ID 寫死在這裡
@@ -22,21 +23,26 @@ const AppState = {
   currentView: 'raw',
   availableViews: [],
   isLoading: false,
-  flags: { hideDebug: false, hideImages: false }  // ★ 新增
+  flags: { hideDebug: false, hideImages: false, hideControls: false },
+
+  // ★ 日程分頁狀態（由 meta['日程表'] 解析）
+  navDays: { gids: [], index: -1 },
+  currentGid: '' // 目前載入的 gid（由 URL 或輸入框而來；用於比對第幾天）
 };
 
-// ★ 解析網址參數，支援 ?hide=debug,img 或 ?hideDebug=1&hideImages=1
+// ★ 解析網址參數，支援 ?hide=debug,ui 或 ?hideDebug=1&hideControls=1
 function applyUrlFlags() {
   const p = new URLSearchParams(location.search);
   const raw = (p.get('hide') || '').toLowerCase();
-  const list = raw.split(/[,\s]+/).filter(Boolean);     // e.g. "debug,ui"
-  const yes = (k) => list.includes(k) || p.get('hide' + k[0].toUpperCase() + k.slice(1)) === '1';
+  const list = raw.split(/[,\s]+/).filter(Boolean); // e.g. "debug,ui"
+  const yes = (k) =>
+    list.includes(k) || p.get('hide' + k[0].toUpperCase() + k.slice(1)) === '1';
 
   AppState.flags.hideDebug    = yes('debug');
   AppState.flags.hideControls = yes('ui') || yes('controls') || yes('bar');
 
   if (AppState.flags.hideControls) document.documentElement.classList.add('hide-controls');
-  // （你不想隱藏圖片，不加 hide-images）
+  // （按你的需求：不主動隱藏圖片區塊）
 }
 
 /* ============ 小工具 / Debug ============ */
@@ -76,7 +82,7 @@ function ensureDebugBox() {
     const host = out?.parentElement || document.body;
     host.appendChild(panel);
 
-    // 追加一點點樣式（只插一次）
+    // 追加樣式（只插一次）
     if (!document.getElementById('debug-style')) {
       const s = document.createElement('style');
       s.id = 'debug-style';
@@ -121,7 +127,6 @@ function logDebug(lines) {
     }
   }
 }
-  
 
 /** 是否像 CSV/TSV（至少兩行，某行含逗號或 tab） */
 function looksLikeDelimited(text) {
@@ -155,12 +160,11 @@ function buildUrlFromTemplate(template, gid) {
 
 /* ============ 表頭偵測：meta / 行程 / 啟發式 ============ */
 
-// 判斷一列是否為「meta 格式」（第一格是 模式/備註/mode）
+// 判斷一列是否為「meta 格式」（第一格是 模式/備註/日期/mode/note/date）
 function isMetaRow(row) {
   const k = String(row?.[0] ?? '').trim().toLowerCase();
   if (!k) return false;
-  // 將「日期」一併視為 meta
-  return ['模式','mode','備註','note','日期','date'].some(
+  return ['模式','mode','備註','note','日期','date','日程表','行程表','days'].some(
     key => key.toLowerCase() === k
   );
 }
@@ -219,7 +223,7 @@ function detectHeaderIndexHeuristic(rows, start = 0, maxCheck = 30) {
 
 /* ============ 解析 CSV 文字 ============ */
 /**
- * - 僅當第1/2列「真的像 meta」才記錄並前移游標
+ * - 連續掃前幾列 meta（模式/備註/日期/日程表…），第2欄起合併為多行；同 key 續接
  * - 行程模式：用 detectHeaderIndexForSchedule
  * - 其他模式：用 detectHeaderIndexHeuristic（不靠關鍵字）
  */
@@ -236,23 +240,22 @@ async function loadFromText(csvText) {
     const rows = parseCSV(csvText);
     if (!rows || rows.length === 0) throw new Error('CSV 為空');
 
-        // step1: 連續掃前幾列的 meta（含：模式/備註/日期…）
-        // 規則：像 meta 的列 => 第 2 欄起全部用 '\n' 併成多行；同 key 續接
-        const meta = {};
-        let cursor = 0;
-        for (let i = 0; i < Math.min(rows.length, 6); i++) { // 掃前 6 列足夠
-          if (!isMetaRow(rows[i])) break;
-          const k = String(rows[i][0] ?? '').trim();
-          const vals = (rows[i].slice(1) || [])
-            .map(x => String(x ?? '').trim())
-            .filter(Boolean);
-          if (k && vals.length) {
-            const joined = vals.join('\n');
-            meta[k] = meta[k] ? (meta[k] + '\n' + joined) : joined;
-          }
-          cursor = i + 1;
-        }
-    
+    // step1: 連續掃前幾列的 meta（含：模式/備註/日期/日程表…）
+    // 規則：像 meta 的列 => 第 2 欄起全部用 '\n' 併成多行；同 key 續接
+    const meta = {};
+    let cursor = 0;
+    for (let i = 0; i < Math.min(rows.length, 6); i++) { // 掃前 6 列足夠
+      if (!isMetaRow(rows[i])) break;
+      const k = String(rows[i][0] ?? '').trim();
+      const vals = (rows[i].slice(1) || [])
+        .map(x => String(x ?? '').trim())
+        .filter(Boolean);
+      if (k && vals.length) {
+        const joined = vals.join('\n');
+        meta[k] = meta[k] ? (meta[k] + '\n' + joined) : joined;
+      }
+      cursor = i + 1;
+    }
 
     // step2: 決定 header 列（行程：找「時刻表/schedule」；否則：啟發式）
     const modeValue = (meta['模式'] || meta['mode'] || '').toString().trim();
@@ -279,6 +282,15 @@ async function loadFromText(csvText) {
 
     AppState.cached = { header, data, meta };
 
+    // ★ 解析「日程表」：更新分頁狀態（僅記錄，渲染時才決定要不要顯示）
+    const gids = parseDayGidsFromMeta(meta);
+    if (gids.length) {
+      // 若目前 currentGid 不在列表，先不亂跳；索引待 render 時比對
+      AppState.navDays.gids = gids;
+    } else {
+      AppState.navDays = { gids: [], index: -1 };
+    }
+
     // step4: 視圖決策
     if (/^行程$/i.test(modeValue)) {
       AppState.availableViews = ['schedule', 'list', 'raw'];
@@ -300,7 +312,6 @@ async function loadFromText(csvText) {
     AppState.isLoading = false;
   }
 }
-
 
 /* ============ 範例載入（手動） ============ */
 async function loadSampleData() {
@@ -340,6 +351,9 @@ async function loadFromUrlTemplate() {
 
   const template = (tplEl.value || '').trim();
   const gid = (gidEl.value || '').trim();
+
+  // ★ 記住目前要載入的 gid（用於日程分頁比對與顯示第幾天）
+  AppState.currentGid = gid || extractGid(template) || AppState.currentGid || '';
 
   // 至少要有 template（可用來抽 gid），或直接填 gid
   if (!template && !gid) {
@@ -392,10 +406,134 @@ async function loadFromUrlTemplate() {
   }
 }
 
+/* ============ 日程分頁（上一頁／下一頁 + 第N天） ============ */
+
+// ★ 將 ?key=value 寫回網址（不重整）
+function updateUrlParam(key, value) {
+  const url = new URL(location.href);
+  if (value == null || value === '') url.searchParams.delete(key);
+  else url.searchParams.set(key, value);
+  history.replaceState(null, '', url.toString());
+}
+
+// ★ 從 meta 解析日程表的 gid 陣列（支援：日程表/行程表/days；分隔：逗號、頓號、換行、空白等）
+function parseDayGidsFromMeta(meta) {
+  if (!meta) return [];
+  const raw = meta['日程表'] || meta['行程表'] || meta['days'] || '';
+  if (!raw) return [];
+  const tokens = String(raw).split(/[\s,，、;；\n\r]+/).filter(Boolean);
+  return tokens.map(s => s.trim()).filter(s => /^\d+$/.test(s));
+}
+
+// ★ 切換到指定 index 的日程（依 gid 載入）
+async function navigateDayTo(index) {
+  const gids = AppState.navDays.gids || [];
+  if (!gids.length) return;
+  const i = Math.max(0, Math.min(index, gids.length - 1));
+  const gid = gids[i];
+
+  // 更新輸入框與內部狀態
+  const gidEl = document.getElementById('gidInput');
+  if (gidEl) gidEl.value = gid;
+  AppState.currentGid = gid;
+  updateUrlParam('gid', gid);
+
+  // 重新載入
+  await loadFromUrlTemplate();
+}
+
+// ★ 上/下一天
+function navigateDayOffset(delta) {
+  const i = (AppState.navDays.index ?? -1) + delta;
+  navigateDayTo(i);
+}
+
+// ★ 建立或更新分頁列（只在 schedule/list/raw 顯示；grid 隱藏）
+function buildDayNavBar() {
+  const meta = AppState?.cached?.meta || {};
+  const gids = parseDayGidsFromMeta(meta);
+  const showForView = AppState.currentView !== 'grid'; // 只在三個檢視顯示
+  const shouldShow = !!(gids.length && showForView);
+
+  // 準備掛載點：插在 #viewToggle 後面；若沒有就插在 #out 前
+  let mountAfter = document.getElementById('viewToggle');
+  let nav = document.getElementById('dayNav');
+  if (!nav) {
+    nav = document.createElement('div');
+    nav.id = 'dayNav';
+    nav.style.margin = '10px 0';
+    if (mountAfter && mountAfter.parentElement) {
+      mountAfter.parentElement.insertBefore(nav, mountAfter.nextSibling);
+    } else {
+      const out = document.getElementById('out');
+      (out?.parentElement || document.body).insertBefore(nav, out || null);
+    }
+
+    // 一次性樣式
+    if (!document.getElementById('dayNav-style')) {
+      const s = document.createElement('style');
+      s.id = 'dayNav-style';
+      s.textContent = `
+        #dayNav{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+        #dayNav .pager{ display:flex; gap:8px; }
+        #dayNav button{
+          padding:6px 10px; border-radius:8px; border:1px solid #e5e7eb;
+          background:#fff; cursor:pointer; font-size:13px;
+        }
+        #dayNav button[disabled]{ opacity:.4; cursor:not-allowed; }
+        #dayNav .current{ font-weight:700; }
+      `;
+      document.head.appendChild(s);
+    }
+  }
+
+  if (!shouldShow) {
+    nav.style.display = 'none';
+    AppState.navDays = { gids: [], index: -1 };
+    return;
+  }
+
+  // 儲存列表
+  AppState.navDays.gids = gids;
+
+  // 計算目前 index（以 AppState.currentGid 對比）
+  const curGid = AppState.currentGid || (new URLSearchParams(location.search).get('gid')) || '';
+  const idx = gids.indexOf(curGid);
+  const curIdx = idx >= 0 ? idx : 0;
+  AppState.navDays.index = curIdx;
+
+  const total = gids.length;
+  const prevIdx = curIdx - 1;
+  const nextIdx = curIdx + 1;
+
+  // 按鈕文案：顯示「第N天」
+  const prevLabel = prevIdx >= 0 ? `第${prevIdx + 1}天` : `第${Math.max(curIdx,0)}天`;
+  const nextLabel = nextIdx < total ? `第${nextIdx + 1}天` : `第${total}天`;
+  const curLabel  = `第${curIdx + 1}天 / 共${total}天`;
+
+  nav.innerHTML = `
+    <div class="pager">
+      <button id="dayPrev" ${prevIdx < 0 ? 'disabled' : ''}>◀ ${prevLabel}</button>
+      <button id="dayNext" ${nextIdx >= total ? 'disabled' : ''}>${nextLabel} ▶</button>
+    </div>
+    <div class="current">${curLabel}</div>
+  `;
+  nav.style.display = '';
+
+  // 綁定事件
+  const prevBtn = document.getElementById('dayPrev');
+  const nextBtn = document.getElementById('dayNext');
+  if (prevBtn) prevBtn.onclick = () => navigateDayOffset(-1);
+  if (nextBtn) nextBtn.onclick = () => navigateDayOffset(1);
+}
+
 /* ============ 視圖切換 / 渲染 ============ */
 function renderCurrentView() {
   if (!AppState.cached) return;
   try {
+    // ★ 先更新日程分頁列（依目前 view 顯示/隱藏）
+    buildDayNavBar();
+
     switch (AppState.currentView) {
       case 'grid':     return window.renderGrid(AppState.cached);
       case 'list':     return window.renderList(AppState.cached);
@@ -464,18 +602,18 @@ function enforceHiddenControls() {
   if (!AppState?.flags?.hideControls) return;
   const selectors = [
     '#csvTemplate', '#gidInput', '#openCsv', '#loadBtn', '#reloadBtn', '#loadSampleBtn',
-   '#status', '.status-row', '#controls', '.controls', '.controls-row',
-   '#title', '.app-title', '.app-header'   // 若你的 h1 有這些常見容器/ID，就直接隱藏
+    '#status', '.status-row', '#controls', '.controls', '.controls-row',
+    '#title', '.app-title', '.app-header'   // 若你的 h1 有這些常見容器/ID，就直接隱藏
   ];
   selectors.forEach(sel => {
     document.querySelectorAll(sel).forEach(el => { el.style.display = 'none'; });
   });
 
- // 沒有固定 ID 的情況：把文字是「試算表檢視器」的 h1 一起藏起來
- document.querySelectorAll('h1').forEach(h => {
-   const t = (h.textContent || '').trim();
-   if (t === '試算表檢視器') h.style.display = 'none';
- });
+  // 沒有固定 ID 的情況：把文字是「試算表檢視器」的 h1 一起藏起來
+  document.querySelectorAll('h1').forEach(h => {
+    const t = (h.textContent || '').trim();
+    if (t === '試算表檢視器') h.style.display = 'none';
+  });
 }
 
 async function initializeApp() {
@@ -487,6 +625,7 @@ async function initializeApp() {
   const params = new URLSearchParams(location.search);
   const gid = params.get('gid');
   if (gid) {
+    AppState.currentGid = gid; // ★ 記住 URL 的 gid（供日程列比對）
     const gidEl = document.getElementById('gidInput');
     if (gidEl) gidEl.value = gid;
     await loadFromUrlTemplate();
@@ -496,14 +635,18 @@ async function initializeApp() {
 window.addEventListener('DOMContentLoaded', () => {
   applyUrlFlags();           // 先套旗標
   initializeEventListeners();
-  enforceHiddenControls();   // ★ 一進來就隱藏一次
+  enforceHiddenControls();   // ★ 一進來就隱藏一次（如有要求）
   initializeApp();
 });
 
-/* 匯出 */
+/* 匯出（給其他模組呼叫） */
 window.loadFromText = loadFromText;
 window.loadFromUrlTemplate = loadFromUrlTemplate;
 window.renderCurrentView = renderCurrentView;
 window.buildUrlFromTemplate = buildUrlFromTemplate;
 window.switchView = switchView;
 window.loadSampleData = loadSampleData;
+
+// ========== 內部工具（本檔用） ==========
+
+// 已於上方宣告：updateUrlParam / parseDayGidsFromMeta / navigateDayTo / navigateDayOffset / buildDayNavBar
