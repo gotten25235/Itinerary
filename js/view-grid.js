@@ -967,12 +967,20 @@ function renderGrid(cached, opts = {}) {
       .img-modal-close{
         position:absolute; top:10px; right:12px;
         width:36px; height:36px;
+        padding:0;
         border-radius:10px;
         border:1px solid rgba(255,255,255,.18);
         background:rgba(0,0,0,.35);
-        color:#fff; font-size:22px; line-height:1;
+        color:#fff;
+      
+        display:flex;
+        align-items:center;
+        justify-content:center;
+      
+        font-size:22px;
+        line-height:1;
         cursor:pointer;
-      }
+      }      
       .img-modal-close:hover{ background:rgba(0,0,0,.5); }
 
       /* 手機：單欄、圖片 16:9、標題可換行 */
