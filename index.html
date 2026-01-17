@@ -4,11 +4,33 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Sheet Viewer — Grid / List / Schedule / raw</title>
+
+  <!-- ★ 預設標題：載入後會由 handle.js 依「標題偵測 / 工作表名稱」覆蓋 -->
+  <title>Sheet Viewer</title>
+
+  <!-- ★ 預覽/分享用描述（避免 LINE/FB 自動抓頁面正文按鈕文字當描述） -->
+  <meta name="description" content="Sheet Viewer：支援 Grid / List / Schedule 檢視，讀取 Google Sheets 匯出的 CSV，適合行程與清單快速瀏覽。" />
+
+  <!-- ★ Open Graph（LINE/FB 等預覽會優先用這些） -->
+  <meta property="og:title" content="Sheet Viewer" />
+  <meta property="og:description" content="Sheet Viewer：支援 Grid / List / Schedule 檢視，讀取 Google Sheets 匯出的 CSV，適合行程與清單快速瀏覽。" />
+  <meta property="og:type" content="website" />
+  <!-- 若你有固定網址，建議填上，預覽更穩定 -->
+  <!-- <meta property="og:url" content="https://your-domain/your-page" /> -->
+  <!-- 若你有預覽圖，建議填上 -->
+  <!-- <meta property="og:image" content="https://your-domain/og.png" /> -->
+
+  <!-- ★ Twitter Card（可選） -->
+  <meta name="twitter:card" content="summary" />
+  <meta name="twitter:title" content="Sheet Viewer" />
+  <meta name="twitter:description" content="Sheet Viewer：支援 Grid / List / Schedule 檢視，讀取 Google Sheets 匯出的 CSV，適合行程與清單快速瀏覽。" />
+  <!-- <meta name="twitter:image" content="https://your-domain/og.png" /> -->
+
   <link rel="stylesheet" href="css/styles.css" />
 </head>
 <body>
-  <h2>檢視器</h2>
+  <!-- ★ 預設顯示：載入後會由 handle.js 覆蓋成偵測到的標題/工作表名稱 -->
+  <h2 id="pageTitle">檢視器</h2>
 
   <!-- 控制列：提供 Google Sheets CSV 模板 + gid + 載入/範例按鈕 -->
   <div class="controls" role="region" aria-label="controls">
@@ -20,7 +42,7 @@
     <button id="openCsv" type="button">在新分頁開啟 CSV</button>
     <button id="loadBtn" type="button">載入資料</button>
     <button id="reloadBtn" type="button">重新載入</button>
-    <button id="loadSampleBtn" type="button">載入範例</button> <!-- ★ 新增：只在按下時才載入 sample.csv -->
+    <button id="loadSampleBtn" type="button">載入範例</button>
   </div>
 
   <!-- 狀態列 -->

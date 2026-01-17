@@ -35,4 +35,5 @@
 - [ ] 測試 Google Sheets export URL（需將試算表設為可公開或使用可讀取的分享連結）。
 
 ---
-如果你要我把檔名改成特定格式（例如全部小寫、加入版本號），或要我把 ZIP 轉成 RAR，請告訴我。我會直接在這裡重新產生並提供下載連結。
+
+https://gotten25235.github.io/Itineraryindex.html?docId={}&gid={}&hide=debug,ui
