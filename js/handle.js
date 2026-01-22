@@ -28,6 +28,7 @@
  * 新增：
  *  - meta 有「日程表」欄（放多個 gid）時，在 schedule/list/raw 顯示「上一頁／下一頁（第N天）」分頁
  *  - 表頭偵測時同步偵測「標題」，覆蓋頁面標題（h2#pageTitle + document.title）
+ *  - 右上角「一頁式」按鈕：一次載入並顯示全部日程表（依 meta['日程表'] gid 清單）
  */
 
 // 預設 Spreadsheet Doc ID（若 URL 或 Template 有提供 docId，會覆蓋）
@@ -45,7 +46,12 @@ const AppState = {
 
   // 目前載入的 gid / docId（由 URL 或輸入而來；用於比對第幾天與組 URL）
   currentGid: '',
-  currentDocId: ''
+  currentDocId: '',
+
+  // 一頁式（日程表全部顯示）
+  onePageMode: false,
+  onePageData: { gids: [], caches: [] },
+  onePageLoading: false
 };
 
 /* ============ URL 參數 / 旗標 ============ */
@@ -198,168 +204,166 @@ function getDocIdFromUrl() {
     p.get('doc') ||
     p.get('doc_id') ||
     p.get('docID') ||
+    p.get('DOC_ID') ||
     ''
   );
 }
 
-/** 取得本次應使用的 docId（URL > Template > DEFAULT） */
-function resolveActiveDocId(template) {
-  const fromUrl = sanitizeDocId(getDocIdFromUrl());
-  if (fromUrl) return fromUrl;
-
-  const fromTpl = sanitizeDocId(extractDocId(template));
-  if (fromTpl) return fromTpl;
-
-  return sanitizeDocId(DEFAULT_DOC_ID) || '';
-}
-
-/** 覆蓋標題：頁面 h2 + 瀏覽器分頁標題 */
-function setSheetTitleToPage(title) {
-  const t = (title || '').toString().trim();
-  if (!t) return;
-
-  const h2 = document.getElementById('pageTitle') || document.querySelector('h2');
-  if (h2) h2.textContent = t;
-
-  document.title = t;
-}
-
-/* ============ URL 組裝（docId 可由 URL/Template 覆蓋） ============ */
-/**
- * docId 來源：resolveActiveDocId(template)
- * gid 來源：輸入 gid 或從 template 抽 gid=
- */
-function buildUrlFromTemplate(template, gid) {
-  const docId = resolveActiveDocId(template);
-  const fallbackGid = extractGid(template);
-  const finalGid = gid && gid.trim() ? gid.trim() : fallbackGid;
-
-  const base = `https://docs.google.com/spreadsheets/d/${encodeURIComponent(docId)}/export?format=csv`;
-  return finalGid ? `${base}&gid=${encodeURIComponent(finalGid)}` : base;
-}
-
-/* ============ 表頭偵測：meta / 行程 / 啟發式 ============ */
+/* ============ meta / header 偵測 ============ */
 
 // 判斷一列是否為 meta（第一格是 模式/備註/日期/日程表/標題...）
 function isMetaRow(row) {
-  const k = String(row?.[0] ?? '').trim().toLowerCase();
+  if (!Array.isArray(row) || !row.length) return false;
+  const k = String(row[0] ?? '').trim().toLowerCase();
   if (!k) return false;
-  return [
+  const keys = [
     '模式', 'mode',
-    '備註', 'note',
+    '備註', 'note', 'notes',
     '日期', 'date',
     '日程表', '行程表', 'days',
-    '標題', 'title', '頁面標題', 'pagetitle', 'page title'
-  ].some((key) => key.toLowerCase() === k);
-}
-
-// 行程用：找含「時刻表 / schedule」那列；找不到回 0
-function detectHeaderIndexForSchedule(rows) {
-  const idx = rows.findIndex((r) => Array.isArray(r) && r.some((c) => /時刻表|schedule/i.test(String(c || ''))));
-  return idx >= 0 ? idx : 0;
-}
-
-// 啟發式（無關鍵字）：評分找「最像表頭」的一列
-function detectHeaderIndexHeuristic(rows, start = 0, maxCheck = 30) {
-  if (!Array.isArray(rows) || rows.length === 0) return 0;
-
-  const isNumericOnly = (v) => /^\d+([.,]\d+)?$/.test(v);
-  const isUrlLike = (v) => /^https?:\/\//i.test(v);
-  const looksTime = (v) => /^\d{1,2}:\d{2}/.test(v);
-  const hasLetters = (v) => /[A-Za-z\u4e00-\u9fff]/.test(v);
-
-  function scoreRow(cells) {
-    let nonEmpty = 0,
-      textish = 0,
-      numeric = 0,
-      urlish = 0,
-      longish = 0,
-      timeLike = 0;
-
-    for (const c of cells || []) {
-      const v = (c ?? '').toString().trim();
-      if (!v) continue;
-      nonEmpty++;
-      if (isNumericOnly(v)) numeric++;
-      if (isUrlLike(v)) urlish++;
-      if (looksTime(v)) timeLike++;
-      if (hasLetters(v)) textish++;
-      if (v.length >= 20) longish++;
-    }
-
-    // 表頭特性：非空較多、以文字為主、數字/URL/超長字較少、不像時間列
-    return (
-      nonEmpty * 2 +
-      textish -
-      numeric * 1.2 -
-      urlish * 1.5 -
-      longish * 0.3 -
-      timeLike * 1.0
-    );
-  }
-
-  let bestIdx = start;
-  let bestScore = -Infinity;
-  const end = Math.min(rows.length, start + maxCheck);
-  for (let i = start; i < end; i++) {
-    const row = (rows[i] || []).map((x) => (x ?? '').toString().trim());
-    const nonEmpty = row.filter(Boolean).length;
-    if (nonEmpty < 2) continue;
-    if (row.some(isUrlLike)) continue;
-    const s = scoreRow(row);
-    if (s > bestScore) {
-      bestScore = s;
-      bestIdx = i;
-    }
-  }
-  return bestIdx;
-}
-
-/**
- * 從 header 上方偵測「標題列」
- * 常見格式：某一列只有一格有文字（其餘皆空），且不是 URL/純數字/時間
- */
-function detectStandaloneTitleRow(rows, from, to) {
-  if (!Array.isArray(rows) || rows.length === 0) return '';
-
-  const isNumericOnly = (v) => /^\d+([.,]\d+)?$/.test(v);
-  const isUrlLike = (v) => /^https?:\/\//i.test(v);
-  const looksTime = (v) => /^\d{1,2}:\d{2}/.test(v);
-  const hasLetters = (v) => /[A-Za-z\u4e00-\u9fff]/.test(v);
-
-  const a = Math.max(0, Number(from) || 0);
-  const b = Math.max(0, Math.min(Number(to) || 0, rows.length));
-  for (let i = a; i < b; i++) {
-    const row = (rows[i] || []).map((x) => (x ?? '').toString().trim());
-    const nonEmptyCells = row.filter(Boolean);
-    if (nonEmptyCells.length !== 1) continue;
-
-    const t = (nonEmptyCells[0] || '').trim();
-    if (!t) continue;
-    if (!hasLetters(t)) continue;
-    if (isNumericOnly(t)) continue;
-    if (isUrlLike(t)) continue;
-    if (looksTime(t)) continue;
-
-    return t;
-  }
-  return '';
+    '標題', '頁面標題', 'title', 'pagetitle', 'page title'
+  ].map((x) => String(x).toLowerCase());
+  return keys.includes(k);
 }
 
 function getMetaValueCaseInsensitive(meta, key) {
-  if (!meta || !key) return '';
-  if (meta[key] != null && String(meta[key]).trim() !== '') return String(meta[key]).trim();
-  const target = String(key).toLowerCase();
-  for (const k of Object.keys(meta)) {
-    if (String(k).toLowerCase() === target) {
-      const v = String(meta[k] ?? '').trim();
-      if (v) return v;
-    }
+  if (!meta || typeof meta !== 'object') return '';
+  const lk = String(key || '').toLowerCase();
+  for (const [k, v] of Object.entries(meta)) {
+    if (String(k).toLowerCase() === lk) return v;
   }
   return '';
 }
 
-/* ============ 解析 CSV 文字 ============ */
+// 行程模式：找含「時刻表/schedule」那列當 header
+function detectHeaderIndexForSchedule(rows) {
+  const keys = ['時刻表', 'schedule'];
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i] || [];
+    const joined = r.map((x) => String(x ?? '')).join(' ').toLowerCase();
+    if (keys.some((k) => joined.includes(String(k).toLowerCase()))) return i;
+  }
+  // fallback：用啟發式
+  return detectHeaderIndexHeuristic(rows, 0);
+}
+
+// 啟發式偵測最像表頭的一列
+function detectHeaderIndexHeuristic(rows, startIdx) {
+  const start = Math.max(0, startIdx || 0);
+  let best = start;
+  let bestScore = -1;
+
+  for (let i = start; i < Math.min(rows.length, start + 30); i++) {
+    const r = rows[i] || [];
+    const cells = r.map((x) => String(x ?? '').trim());
+    const nonEmpty = cells.filter(Boolean).length;
+    if (nonEmpty < 2) continue;
+
+    // score: 非空 + 偏好較短字串（像欄名）
+    const avgLen = nonEmpty ? cells.reduce((a, c) => a + (c ? c.length : 0), 0) / nonEmpty : 999;
+    const uniq = new Set(cells.filter(Boolean)).size;
+    const score = nonEmpty * 2 + uniq - Math.min(avgLen, 20) / 4;
+
+    if (score > bestScore) {
+      bestScore = score;
+      best = i;
+    }
+  }
+  return best;
+}
+
+// 偵測獨立標題列（非必要，有就用）
+function detectStandaloneTitleRow(rows, cursor, headerIndex) {
+  const start = Math.max(0, cursor || 0);
+  const end = Math.min(rows.length, headerIndex || rows.length);
+  for (let i = start; i < end; i++) {
+    const r = rows[i] || [];
+    const a = String(r[0] ?? '').trim();
+    const b = String(r[1] ?? '').trim();
+    const c = String(r[2] ?? '').trim();
+
+    // 若第一格有文字，後面幾格幾乎空，當作標題
+    const restEmpty = (!b && !c) && r.slice(1).every((x) => !String(x ?? '').trim());
+    if (a && restEmpty && a.length <= 80) return a;
+  }
+  return '';
+}
+
+function setSheetTitleToPage(title) {
+  const t = String(title || '').trim();
+  if (!t) return;
+  const el = document.getElementById('pageTitle');
+  if (el) el.textContent = t;
+  document.title = t;
+}
+
+/* ============ URL 組合 / docId 決策 ============ */
+
+function resolveActiveDocId(template) {
+  // 1) URL query 覆蓋
+  const fromUrl = sanitizeDocId(getDocIdFromUrl());
+  if (fromUrl) return fromUrl;
+
+  // 2) template 若貼了 Google Sheets URL，抽 docId
+  const fromTpl = sanitizeDocId(extractDocId(template));
+  if (fromTpl) return fromTpl;
+
+  // 3) default
+  const def = sanitizeDocId(DEFAULT_DOC_ID);
+  return def || '';
+}
+
+function buildUrlFromTemplate(template, gid) {
+  const tpl = String(template || '').trim();
+  const g = String(gid || '').trim() || extractGid(tpl);
+  const docId = resolveActiveDocId(tpl);
+
+  if (!docId) throw new Error('無法取得 docId（請檢查 URL 或 template）');
+  if (!g) throw new Error('無法取得 gid（請在 input 或 template 帶 gid=）');
+
+  // 若 template 本身就是 export URL，優先用它（但強制修正 docId/gid）
+  if (/docs\.google\.com\/spreadsheets\/d\//i.test(tpl) && /\/export\?/i.test(tpl)) {
+    let u = tpl;
+
+    // 1) 支援 placeholder：{docId}/{DOC_ID}/{doc}/{gid} 這類
+    u = u.replaceAll('{docId}', docId)
+         .replaceAll('{DOC_ID}', docId)
+         .replaceAll('{doc}', docId)
+         .replaceAll('{DOC}', docId);
+
+    u = u.replaceAll('{gid}', g)
+         .replaceAll('{GID}', g);
+
+    // 2) 強制把 /spreadsheets/d/<任意非斜線>/ 替換成正確 docId
+    //    這個會吃掉 /d/{gid}/ 這種錯誤寫法
+    u = u.replace(/\/spreadsheets\/d\/[^/]+/i, `/spreadsheets/d/${encodeURIComponent(docId)}`);
+
+    // 3) gid 參數：若已有 gid=xxxx 直接替換；若是 gid={gid} 也會在上面被換掉
+    if (/[?&#]gid=/.test(u)) {
+      u = u.replace(/([?&#]gid=)[^&#]*/i, `$1${encodeURIComponent(g)}`);
+    } else {
+      const sep = u.includes('?') ? '&' : '?';
+      u = u + `${sep}gid=${encodeURIComponent(g)}`;
+    }
+
+    // 4) 確保 format=csv（若沒有就補；若有其他 format 也改成 csv）
+    if (/[?&#]format=/.test(u)) {
+      u = u.replace(/([?&#]format=)[^&#]*/i, `$1csv`);
+    } else {
+      const sep = u.includes('?') ? '&' : '?';
+      u = u + `${sep}format=csv`;
+    }
+
+    return u;
+  }
+
+  // template 不是 export URL：直接組標準 export
+  return `https://docs.google.com/spreadsheets/d/${encodeURIComponent(docId)}/export?format=csv&gid=${encodeURIComponent(g)}`;
+}
+
+
+/* ============ CSV 解析後載入 ============ */
+
 async function loadFromText(csvText) {
   const statusEl = document.getElementById('status');
   const out = document.getElementById('out');
@@ -453,6 +457,7 @@ async function loadFromText(csvText) {
     }
 
     buildViewToggle();
+    updateOnePageButtonVisibility();
     statusEl.textContent = `解析完成：${data.length} 筆（標題列索引 ${headerIndex}）`;
     renderCurrentView();
   } catch (err) {
@@ -587,6 +592,314 @@ function parseDayGidsFromMeta(meta) {
   return tokens.map((s) => s.trim()).filter((s) => /^\d+$/.test(s));
 }
 
+/* ============ 一頁式（日程表全部顯示） ============ */
+
+/**
+ * 將 CSV 文字解析為 cached（不改動 AppState）
+ * - 與 loadFromText 的邏輯一致：meta 掃描、header 偵測、資料組裝
+ * - 回傳 { header, data, meta, modeValue }
+ */
+function parseCsvTextToCached(csvText) {
+  const rows = parseCSV(csvText);
+  if (!rows || rows.length === 0) throw new Error('CSV 為空');
+
+  // step1: 掃前幾列 meta
+  const meta = {};
+  let cursor = 0;
+  for (let i = 0; i < Math.min(rows.length, 6); i++) {
+    if (!isMetaRow(rows[i])) break;
+    const k = String(rows[i][0] ?? '').trim();
+    const vals = (rows[i].slice(1) || [])
+      .map((x) => String(x ?? '').trim())
+      .filter(Boolean);
+    if (k && vals.length) {
+      const joined = vals.join('\n');
+      meta[k] = meta[k] ? meta[k] + '\n' + joined : joined;
+    }
+    cursor = i + 1;
+  }
+
+  // step2: 決定 header 列
+  const modeValue = (getMetaValueCaseInsensitive(meta, '模式') || getMetaValueCaseInsensitive(meta, 'mode') || '')
+    .toString()
+    .trim();
+
+  let headerIndex;
+  if (/^行程$/i.test(modeValue)) headerIndex = detectHeaderIndexForSchedule(rows);
+  else headerIndex = detectHeaderIndexHeuristic(rows, cursor);
+
+  const header = (rows[headerIndex] || []).map((h) => (h || '').toString().trim());
+
+  // step3: 組資料
+  const data = [];
+  for (let i = headerIndex + 1; i < rows.length; i++) {
+    const r = rows[i] || [];
+    const obj = {};
+    for (let j = 0; j < header.length; j++) {
+      const key = header[j] || `col${j}`;
+      obj[key] = r[j] != null ? String(r[j]).trim() : '';
+    }
+    if (Object.values(obj).some((v) => v !== '')) data.push(obj);
+  }
+
+  return { header, data, meta, modeValue };
+}
+
+function ensureOnePageButton() {
+  let btn = document.getElementById('onePageBtn');
+  if (btn) return btn;
+
+  btn = document.createElement('button');
+  btn.id = 'onePageBtn';
+  btn.type = 'button';
+  btn.textContent = '一頁式';
+  btn.title = '一頁式顯示全部日程表';
+  btn.style.display = 'none';
+
+  btn.addEventListener('click', async () => {
+    if (AppState.onePageLoading) return;
+    await toggleOnePageMode();
+  });
+
+  document.body.appendChild(btn);
+
+  if (!document.getElementById('onePageBtn-style')) {
+    const s = document.createElement('style');
+    s.id = 'onePageBtn-style';
+    s.textContent = `
+      #onePageBtn{
+        position: fixed;
+        top: 12px;
+        right: 12px;
+        z-index: 9990;
+
+        padding: 8px 12px;
+        border-radius: 10px;
+        border: 1px solid #e5e7eb;
+        background: #ffffff;
+        color: #111827;
+
+        cursor: pointer;
+        font-size: 13px;
+        font-weight: 700;
+
+        box-shadow: 0 8px 18px rgba(0,0,0,.08);
+        user-select: none;
+      }
+      #onePageBtn:hover{ background:#f9fafb; }
+      #onePageBtn[disabled]{ opacity:.5; cursor:not-allowed; }
+    `;
+    document.head.appendChild(s);
+  }
+
+  return btn;
+}
+
+function updateOnePageButtonVisibility() {
+  const btn = ensureOnePageButton();
+
+  const cached = AppState.cached;
+  const hasScheduleView = Array.isArray(AppState.availableViews) && AppState.availableViews.includes('schedule');
+  const gids = parseDayGidsFromMeta(cached?.meta || {});
+  const hasDays = gids.length > 0;
+
+  // 只有「行程模式」且 meta 有日程表 gid 清單時才顯示
+  const shouldShow = !!(cached && hasScheduleView && hasDays);
+
+  btn.style.display = shouldShow ? '' : 'none';
+  btn.disabled = !!AppState.onePageLoading;
+
+  if (!shouldShow) {
+    AppState.onePageMode = false;
+    AppState.onePageData = { gids: [], caches: [] };
+  }
+
+  btn.textContent = AppState.onePageMode ? '回單日' : '一頁式';
+  btn.title = AppState.onePageMode ? '回到單日顯示' : '一頁式顯示全部日程表';
+}
+
+function hideDayNavBarForOnePage() {
+  const nav = document.getElementById('dayNav');
+  if (nav) nav.style.display = 'none';
+}
+
+function renderOnePageFromState() {
+  const out = document.getElementById('out');
+  const statusEl = document.getElementById('status');
+  if (!out) return;
+
+  hideDayNavBarForOnePage();
+
+  const gids = AppState.onePageData?.gids || [];
+  const caches = AppState.onePageData?.caches || [];
+
+  out.innerHTML = '';
+
+  const wrap = document.createElement('div');
+  wrap.className = 'onepage-wrap';
+  out.appendChild(wrap);
+
+  if (!document.getElementById('onepage-style')) {
+    const s = document.createElement('style');
+    s.id = 'onepage-style';
+    s.textContent = `
+      .onepage-wrap{ display:flex; flex-direction:column; gap:18px; }
+      .onepage-day{
+        border: 1px solid #e5e7eb;
+        border-radius: 14px;
+        background: #fff;
+        overflow: hidden;
+      }
+      .onepage-day-header{
+        display:flex; align-items:center; justify-content:space-between;
+        padding: 10px 12px;
+        background: #f9fafb;
+        border-bottom: 1px solid #e5e7eb;
+        font-weight: 800;
+      }
+      .onepage-day-header small{
+        color:#6b7280;
+        font-weight: 700;
+      }
+      .onepage-day-body{ padding: 10px 10px 12px; }
+    `;
+    document.head.appendChild(s);
+  }
+
+  for (let i = 0; i < caches.length; i++) {
+    const cached = caches[i];
+    const gid = gids[i] || '';
+    const date = (cached?.meta && (cached.meta['日期'] || cached.meta['date'])) ? String(cached.meta['日期'] || cached.meta['date']).trim() : '';
+
+    const day = document.createElement('div');
+    day.className = 'onepage-day';
+
+    const head = document.createElement('div');
+    head.className = 'onepage-day-header';
+    head.innerHTML = `
+      <div>第${i + 1}天</div>
+      <small>${date ? escapeHtml(date) + ' · ' : ''}gid=${escapeHtml(String(gid))}</small>
+    `;
+
+    const body = document.createElement('div');
+    body.className = 'onepage-day-body';
+
+    day.appendChild(head);
+    day.appendChild(body);
+    wrap.appendChild(day);
+
+    // 只渲染行程（若該天不是行程模式，就顯示簡易預覽）
+    const modeValue = (cached?.meta && (getMetaValueCaseInsensitive(cached.meta, '模式') || getMetaValueCaseInsensitive(cached.meta, 'mode'))) || '';
+    const isSchedule = /^行程$/i.test(String(modeValue).trim());
+
+    if (isSchedule && typeof window.renderSchedule === 'function') {
+      // renderSchedule 固定使用 #out；這裡用「暫時換 id」的方式，讓它渲染到 body
+      const temp = document.createElement('div');
+      body.appendChild(temp);
+
+      const realOut = document.getElementById('out');
+      const realOutId = realOut ? realOut.id : 'out';
+
+      if (realOut) realOut.id = 'out_real';
+
+      temp.id = 'out';
+      try {
+        window.renderSchedule(cached);
+      } finally {
+        const rendered = temp.innerHTML;
+        temp.remove();
+        body.innerHTML = rendered;
+
+        if (realOut) realOut.id = realOutId;
+      }
+    } else {
+      const pre = document.createElement('pre');
+      pre.style.cssText = 'max-width:100%;overflow:auto;background:#f6f8fa;padding:12px;border-radius:10px;';
+      pre.textContent = JSON.stringify(
+        { meta: cached?.meta || {}, header: cached?.header || [], sample: (cached?.data || []).slice(0, 10) },
+        null,
+        2
+      );
+      body.appendChild(pre);
+    }
+  }
+
+  if (statusEl) statusEl.textContent = `一頁式：共 ${caches.length} 天`;
+}
+
+async function fetchAllSchedulesForOnePage() {
+  const tplEl = document.getElementById('csvTemplate');
+  const statusEl = document.getElementById('status');
+
+  const template = (tplEl?.value || '').trim();
+  const cached = AppState.cached;
+  const gids = parseDayGidsFromMeta(cached?.meta || {});
+
+  if (!gids.length) throw new Error('meta 未提供日程表（gids）');
+
+  // 沒有模板時，至少用 docId 組出 export URL
+  const docId = AppState.currentDocId || sanitizeDocId(DEFAULT_DOC_ID) || '';
+  if (!template && !docId) throw new Error('缺少模板與 docId，無法載入全部日程表');
+
+  AppState.onePageLoading = true;
+  updateOnePageButtonVisibility();
+
+  const caches = [];
+  for (let i = 0; i < gids.length; i++) {
+    const gid = gids[i];
+    if (statusEl) statusEl.textContent = `一頁式載入中：${i + 1} / ${gids.length}（gid=${gid}）`;
+
+    const url = template
+      ? buildUrlFromTemplate(template, gid)
+      : `https://docs.google.com/spreadsheets/d/${encodeURIComponent(docId)}/export?format=csv&gid=${encodeURIComponent(gid)}`;
+
+    const resp = await fetch(url, { cache: 'no-store', redirect: 'follow', credentials: 'omit', mode: 'cors' });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText} (gid=${gid})`);
+    const text = await resp.text();
+
+    const parsed = parseCsvTextToCached(text);
+    caches.push({ header: parsed.header, data: parsed.data, meta: parsed.meta });
+  }
+
+  AppState.onePageData = { gids, caches };
+}
+
+async function toggleOnePageMode() {
+  const statusEl = document.getElementById('status');
+
+  // 關閉：回到單日
+  if (AppState.onePageMode) {
+    AppState.onePageMode = false;
+    AppState.onePageData = { gids: [], caches: [] };
+    updateOnePageButtonVisibility();
+    renderCurrentView();
+    return;
+  }
+
+  // 開啟：一頁式只支援「行程」視圖
+  const hasScheduleView = Array.isArray(AppState.availableViews) && AppState.availableViews.includes('schedule');
+  if (!hasScheduleView) {
+    if (statusEl) statusEl.textContent = '一頁式只支援「行程」模式';
+    return;
+  }
+
+  try {
+    await fetchAllSchedulesForOnePage();
+    AppState.onePageMode = true;
+    updateOnePageButtonVisibility();
+    renderOnePageFromState();
+  } catch (e) {
+    console.error('一頁式載入失敗：', e);
+    logDebug(['[onePage] error', String(e.stack || e)]);
+    if (statusEl) statusEl.textContent = '一頁式載入失敗（請看 Console / Debug）';
+    AppState.onePageMode = false;
+    AppState.onePageData = { gids: [], caches: [] };
+  } finally {
+    AppState.onePageLoading = false;
+    updateOnePageButtonVisibility();
+  }
+}
+
 // 切換到指定 index 的日程（依 gid 載入）
 async function navigateDayTo(index) {
   const gids = AppState.navDays.gids || [];
@@ -687,6 +1000,11 @@ function renderCurrentView() {
   if (!AppState.cached) return;
   try {
     buildDayNavBar();
+    updateOnePageButtonVisibility();
+
+    if (AppState.onePageMode) {
+      return renderOnePageFromState();
+    }
 
     switch (AppState.currentView) {
       case 'grid':
@@ -708,6 +1026,13 @@ function renderCurrentView() {
 
 function switchView(view) {
   if (!AppState.availableViews.includes(view)) return;
+
+  // 一頁式僅適用於行程（schedule）；若切到其他視圖，自動回單日
+  if (AppState.onePageMode && view !== 'schedule') {
+    AppState.onePageMode = false;
+    AppState.onePageData = { gids: [], caches: [] };
+  }
+
   AppState.currentView = view;
   document.querySelectorAll('#viewToggle button').forEach((btn) => {
     btn.classList.toggle('active', btn.dataset.view === view);
@@ -735,6 +1060,8 @@ function buildViewToggle() {
     btn.addEventListener('click', () => switchView(v));
     ctr.appendChild(btn);
   });
+
+  updateOnePageButtonVisibility();
 }
 
 /* ============ 初始化 ============ */
@@ -761,78 +1088,53 @@ function initializeEventListeners() {
     });
   }
 
-  if (loadBtn) loadBtn.addEventListener('click', () => loadFromUrlTemplate());
-  if (reloadBtn) reloadBtn.addEventListener('click', () => loadFromUrlTemplate());
-  if (loadSampleBtn) loadSampleBtn.addEventListener('click', () => loadSampleData());
+  if (loadBtn) loadBtn.addEventListener('click', loadFromUrlTemplate);
+  if (reloadBtn) reloadBtn.addEventListener('click', loadFromUrlTemplate);
+  if (loadSampleBtn) loadSampleBtn.addEventListener('click', loadSampleData);
+
+  // 支援 Enter 觸發載入
+  const tplEl = document.getElementById('csvTemplate');
+  const gidEl = document.getElementById('gidInput');
+  if (tplEl) tplEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') loadFromUrlTemplate(); });
+  if (gidEl) gidEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') loadFromUrlTemplate(); });
 }
 
-// 強制隱藏 controls + status（JS 層級，保證即時生效）
-function enforceHiddenControls() {
-  if (!AppState?.flags?.hideControls) return;
-  const selectors = [
-    '#csvTemplate',
-    '#gidInput',
-    '#openCsv',
-    '#loadBtn',
-    '#reloadBtn',
-    '#loadSampleBtn',
-    '#status',
-    '.status-row',
-    '#controls',
-    '.controls',
-    '.controls-row',
-    '#title',
-    '.app-title',
-    '.app-header'
-  ];
-  selectors.forEach((sel) => {
-    document.querySelectorAll(sel).forEach((el) => {
-      el.style.display = 'none';
-    });
-  });
+function initializeFromUrlParams() {
+  const p = new URLSearchParams(location.search);
 
-  document.querySelectorAll('h1').forEach((h) => {
-    const t = (h.textContent || '').trim();
-    if (t === '試算表檢視器') h.style.display = 'none';
-  });
+  // gid
+  const gid = p.get('gid') || '';
+  const gidEl = document.getElementById('gidInput');
+  if (gidEl && gid) gidEl.value = gid;
+  AppState.currentGid = gid;
+
+  // docId（不強制寫入 template，只在載入時取用）
+  const docId = sanitizeDocId(getDocIdFromUrl());
+  if (docId) AppState.currentDocId = docId;
+
+  // 初始視圖（若提供 view=schedule/list/raw/grid）
+  const view = (p.get('view') || '').toLowerCase();
+  if (view) AppState.currentView = view;
+
+  // 若 URL 有 template（可選）：?tpl=...
+  const tpl = p.get('tpl') || '';
+  const tplEl = document.getElementById('csvTemplate');
+  if (tplEl && tpl) tplEl.value = tpl;
 }
 
-async function initializeApp() {
+function main() {
   applyUrlFlags();
-
-  // 初始化 docId（優先 URL）
-  {
-    const docId = sanitizeDocId(getDocIdFromUrl()) || sanitizeDocId(DEFAULT_DOC_ID) || '';
-    AppState.currentDocId = docId;
-  }
-
-  const statusEl = document.getElementById('status');
-  if (statusEl) statusEl.textContent = '尚未載入（請輸入 gid 或在模板欄貼含 gid= 的 URL，再按「載入資料」）';
-
-  // 若網址帶 gid 就預填並嘗試載入
-  const params = new URLSearchParams(location.search);
-  const gid = params.get('gid');
-  if (gid) {
-    AppState.currentGid = gid;
-    const gidEl = document.getElementById('gidInput');
-    if (gidEl) gidEl.value = gid;
-    await loadFromUrlTemplate();
-  }
-}
-
-window.addEventListener('DOMContentLoaded', () => {
-  applyUrlFlags();
+  initializeFromUrlParams();
   initializeEventListeners();
-  enforceHiddenControls();
-  initializeApp();
-});
 
-/* 匯出（給其他模組呼叫） */
-window.loadFromText = loadFromText;
-window.loadFromUrlTemplate = loadFromUrlTemplate;
-window.renderCurrentView = renderCurrentView;
-window.buildUrlFromTemplate = buildUrlFromTemplate;
-window.switchView = switchView;
-window.loadSampleData = loadSampleData;
+  // 初次畫面：如果 URL 已有 template + gid，直接載入
+  const tplEl = document.getElementById('csvTemplate');
+  const gidEl = document.getElementById('gidInput');
+  const hasTpl = !!(tplEl && String(tplEl.value || '').trim());
+  const hasGid = !!(gidEl && String(gidEl.value || '').trim());
+  if (hasTpl && hasGid) loadFromUrlTemplate();
 
-// 內部工具（本檔用）：updateUrlParam / parseDayGidsFromMeta / navigateDayTo / navigateDayOffset / buildDayNavBar
+  updateOnePageButtonVisibility();
+}
+
+main();

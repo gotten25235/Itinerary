@@ -27,7 +27,7 @@
         justify-content: flex-end !important;
       }
 
-      /* 左側時間欄（保險：has-plus 一定蓋過藍底） */
+      /* 左側時間欄 */
       .schedule-time-section{
         border-radius: 10px !important;
         padding: 8px 6px !important;
@@ -38,10 +38,19 @@
         background: #2563eb !important;
         color: #fff !important;
       }
+
+      /* ? / ？：紅色 */
       .schedule-time-section.has-plus{
         background: #ef4444 !important;
         color: #fff !important;
       }
+
+      /* @ / ＠：灰色 */
+      .schedule-time-section.has-at{
+        background: #9ca3af !important;
+        color: #fff !important;
+      }
+
       .schedule-time{
         font-size: 14px !important;
         font-weight: 700 !important;

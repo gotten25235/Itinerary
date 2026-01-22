@@ -15,12 +15,16 @@
  * - 點選圖片：放大預覽（與背景點擊分離，不觸發官網）
  * - hoursKey 沒填也維持同排版：topbar 永遠存在，空值隱藏文字但保留分隔線位置
  *
- * 金額顯示規則（本次修正重點）：
+ * 金額顯示規則（既有）：
  * - 只處理「明確非 NTD/TWD」的幣別：RMB/CNY、JPY、USD、KRW、HKD
  * - 若檢測到 NT / TWD / NTD：完全不處理（照原本字串顯示）
  * - 若沒寫幣別：完全不處理（照原本字串顯示）
  * - 若「換算金額(NT)」該行有值：優先使用該值；否則用匯率自動換算
  * - 金額欄位可為多行：逐行處理；有幣別才換算，其他行原樣保留
+ *
+ * 本次需求：
+ * - 時刻表只有 !（含全形 ！）→ 顯示灰色，並排序放最下面（在 ? / ？ 之後）
+ * - 新增欄位：隱藏（hide/hidden）→ 若該欄位有填值，該筆行程不顯示
  */
 
 /* escapeHtml 由 csv-parser.js 提供（window.escapeHtml） */
@@ -207,8 +211,6 @@ function buildPriceDisplaySingleLine(priceRawLine, priceNtRawLine) {
     return line;
   }
 
-  // 其他幣別：顯示「原字串(約NT$xxxx)」
-  // - 單位（/人 /1人 ...）要保留，且括號內也加同單位
   const { base, suffix } = extractTrailingUnitSuffix(line);
 
   // 換算金額優先：換算金額(NT) 若有填，吃它；否則用匯率
@@ -224,7 +226,6 @@ function buildPriceDisplaySingleLine(priceRawLine, priceNtRawLine) {
   const ntText = formatNtdAmount(nt);
   if (!ntText) return line;
 
-  // 例：RMB$ 3401/人 -> RMB$ 3401/人(約NT$14964/人)
   if (suffix) {
     return `${base}${suffix}(約${ntText}${suffix})`;
   }
@@ -359,13 +360,32 @@ function showCopyToast(msg) {
 }
 
 /* =========================
- * Main render
+ * Schedule sort / hide rules
  * ========================= */
 
 function isUnknownScheduleTime(v) {
   const s = String(v || '').trim();
   return s === '?' || s === '？';
 }
+
+function isAtScheduleTime(v) {
+  const s = String(v || '').trim();
+  return s === '!' || s === '！';
+}
+
+function scheduleTimeRank(v) {
+  if (isAtScheduleTime(v)) return 2;      // 最後
+  if (isUnknownScheduleTime(v)) return 1; // 倒數第二
+  return 0;
+}
+
+function hasNonEmptyValue(v) {
+  return String(v ?? '').trim().length > 0;
+}
+
+/* =========================
+ * Main render
+ * ========================= */
 
 function renderSchedule(cached) {
   const out = document.getElementById('out');
@@ -381,7 +401,7 @@ function renderSchedule(cached) {
 
   const keyTime = header[0];
   const keyType = pickField(header, ['類型', 'type', '分類', 'category']);
-  const keyName = pickField(header, ['名稱', 'name', 'title', '主題','景點']) || header[1] || header[0];
+  const keyName = pickField(header, ['名稱', 'name', 'title', '主題', '景點']) || header[1] || header[0];
 
   const keyLocation = pickField(header, ['地址', 'address']);
   const keyLocationAlias = pickField(header, ['地點別稱', '地點', 'location', '別稱', 'alias', 'location alias']);
@@ -399,17 +419,26 @@ function renderSchedule(cached) {
   const keyImage = pickField(header, ['圖片', '圖片網址', '照片', 'image', 'img', 'thumbnail', 'photo', 'pic', '圖']);
   const keyNote = pickField(header, ['備註', 'note']);
 
-  // 排序規則修正：
-  // - 時刻欄位若「只有 ? / ？」=> 排到最後
+  // 新增：隱藏欄位（有值即不顯示）
+  const keyHide = pickField(header, ['隱藏', 'hide', 'hidden']);
+
+  // 先過濾「隱藏」的項目
+  const visibleData = keyHide
+    ? data.filter((row) => !hasNonEmptyValue(row[keyHide]))
+    : data;
+
+  // 排序規則：
+  // - 時刻欄位只有 ? / ？ => 放後面
+  // - 時刻欄位只有 ! / ！ => 放最下面（且在 ? 後面）
   // - 其他照原本字串排序
-  const sorted = [...data].sort((a, b) => {
-    const ta = String(a[keyTime] || '');
-    const tb = String(b[keyTime] || '');
+  const sorted = [...visibleData].sort((a, b) => {
+    const ta = String(a[keyTime] || '').trim();
+    const tb = String(b[keyTime] || '').trim();
 
-    const ua = isUnknownScheduleTime(ta);
-    const ub = isUnknownScheduleTime(tb);
+    const ra = scheduleTimeRank(ta);
+    const rb = scheduleTimeRank(tb);
+    if (ra !== rb) return ra - rb;
 
-    if (ua !== ub) return ua ? 1 : -1;
     return ta.localeCompare(tb);
   });
 
@@ -464,7 +493,8 @@ function renderSchedule(cached) {
     if (/\u9078/.test(String(typ))) nameClasses.push('is-optional');
 
     const timeSectionClasses = ['schedule-time-section'];
-    if (String(time).includes('?')) timeSectionClasses.push('has-plus');
+    if (isUnknownScheduleTime(time)) timeSectionClasses.push('has-plus'); // 既有：紅色
+    if (isAtScheduleTime(time)) timeSectionClasses.push('has-at');        // 本次：灰色
 
     const bgUrl = siteUrl || firstReviewUrl || '';
 
@@ -598,7 +628,7 @@ function renderSchedule(cached) {
     });
   }
 
-  const styleId = 'schedule-style-v9';
+  const styleId = 'schedule-style-v10';
   if (!document.getElementById(styleId)) {
     const s = document.createElement('style');
     s.id = styleId;
@@ -692,15 +722,15 @@ function renderSchedule(cached) {
       border:1px solid rgba(255,255,255,.18);
       background:rgba(0,0,0,.35);
       color:#fff;
-    
+
       display:flex;
       align-items:center;
       justify-content:center;
-    
+
       font-size:22px;
       line-height:1;
       cursor:pointer;
-    }    
+    }
     .img-modal-close:hover{ background:rgba(0,0,0,.5); }
 
     @media (min-width: 769px) {
@@ -719,6 +749,7 @@ function renderSchedule(cached) {
 
       .schedule-time-section{ display:flex; align-items:center; justify-content:center; border-radius:8px; background:#2563eb; color:#fff; }
       .schedule-time-section.has-plus{ background:#ef4444; color:#fff; }
+      .schedule-time-section.has-at{ background:#9ca3af; color:#fff; }
       .schedule-time{ font-weight:700; font-size:18px; padding:6px 10px; }
       .schedule-time{ display:flex; flex-direction:column; align-items:center; justify-content:center; line-height:1.15; }
       .schedule-time > span{ display:block; }
