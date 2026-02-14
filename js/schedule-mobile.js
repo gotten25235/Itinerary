@@ -1,5 +1,8 @@
 // filename: js/schedule-mobile.js
 // 手機/平板強制覆蓋版：提高權重、加 !important，確保生效
+// 通用：
+// - 行程（schedule-container 非 shopping-container）維持藍/紅/灰（has-plus/has-at）
+// - 採購清單（schedule-container.shopping-container）時間欄一律中性灰，不吃 has-plus/has-at
 (function injectScheduleMobileStyles() {
   const id = 'schedule-mobile-style';
   const old = document.getElementById(id);
@@ -27,7 +30,7 @@
         justify-content: flex-end !important;
       }
 
-      /* 左側時間欄 */
+      /* ===== 左側時間欄（通用） ===== */
       .schedule-time-section{
         border-radius: 10px !important;
         padding: 8px 6px !important;
@@ -35,20 +38,31 @@
         display: flex !important;
         align-items: center !important;
         justify-content: center !important;
+        color: #fff !important;
+      }
+
+      /* 行程：預設藍色 */
+      .schedule-container:not(.shopping-container) .schedule-time-section{
         background: #2563eb !important;
-        color: #fff !important;
       }
 
-      /* ? / ？：紅色 */
-      .schedule-time-section.has-plus{
+      /* 行程：? / ？：紅色 */
+      .schedule-container:not(.shopping-container) .schedule-time-section.has-plus{
         background: #ef4444 !important;
-        color: #fff !important;
       }
 
-      /* @ / ＠：灰色 */
-      .schedule-time-section.has-at{
+      /* 行程：@ / ＠：灰色 */
+      .schedule-container:not(.shopping-container) .schedule-time-section.has-at{
         background: #9ca3af !important;
-        color: #fff !important;
+      }
+
+      /* 採購清單：一律中性灰（不吃 has-plus/has-at） */
+      .schedule-container.shopping-container .schedule-time-section{
+        background: #6b7280 !important;
+      }
+      .schedule-container.shopping-container .schedule-time-section.has-plus,
+      .schedule-container.shopping-container .schedule-time-section.has-at{
+        background: #6b7280 !important;
       }
 
       .schedule-time{
@@ -93,23 +107,23 @@
         min-width: 0 !important;
       }
 
-      /* 圖片框：4:3（你要的比較高），且一定要「用 auto height 才會撐起來」 */
+      /* 圖片框：4:3，且一定要用 auto height 才會撐起來 */
       .schedule-item .schedule-content-section .schedule-image{
         width: 100% !important;
         aspect-ratio: 4 / 3 !important;
-        height: auto !important;     /* 再保險一次，避免被其他規則設死 */
+        height: auto !important;
         border-radius: 12px !important;
         overflow: hidden !important;
         position: relative !important;
         background: #f3f4f6 !important;
       }
 
-      /* 手機不需要 blur 背景層（避免誤判/干擾） */
+      /* 手機不需要 blur 背景層（避免干擾） */
       .schedule-item .schedule-content-section .schedule-image .img-bg{
         display: none !important;
       }
 
-      /* 圖片本體：滿版（接近你第一張） */
+      /* 圖片本體：滿版 */
       .schedule-item .schedule-content-section .schedule-image img,
       .schedule-item .schedule-content-section .schedule-image img.img-fg{
         position: absolute !important;
@@ -129,6 +143,7 @@
         gap: 10px !important;
         justify-content: flex-start !important;
         padding-left: 2px !important;
+        flex-wrap: wrap !important;
       }
 
       /* 字級/換行 */

@@ -22,8 +22,9 @@
  *  - 其他模式：純啟發式偵測最像表頭的一列
  *
  * 視圖：
- *  - 模式=行程 -> ['schedule','list','raw']（預設 schedule）
- *  - 否則       -> ['grid','list','raw']（預設 grid）
+ *  - 模式=行程     -> ['schedule','list','raw']（預設 schedule）
+ *  - 模式=採購清單 -> ['shopping','list','raw']（預設 shopping）
+ *  - 否則          -> ['grid','list','raw']（預設 grid）
  *
  * 新增：
  *  - meta 有「日程表」欄（放多個 gid）時，在 schedule/list/raw 顯示「上一頁／下一頁（第N天）」分頁
@@ -133,6 +134,11 @@ function ensureDebugBox() {
           display:inline-block; margin-left:8px; padding:0 6px; border-radius:999px;
           background:#111827; color:#fff; font-size:12px; line-height:18px;
         }
+        #debugMode {
+          display:inline-block; margin-left:8px; padding:0 8px; border-radius:999px;
+          background:#f3f4f6; color:#111827; font-size:12px; line-height:18px; font-weight:700;
+          border:1px solid #e5e7eb;
+        }
       `;
       document.head.appendChild(s);
     }
@@ -161,6 +167,56 @@ function logDebug(lines) {
       existing.textContent = count;
     }
   }
+  updateDebugSummaryContext();
+}
+
+
+// 同步在 Debug summary 顯示「目前模式 / 視圖 / 一頁式狀態」
+function updateDebugSummaryContext() {
+  // 若 debug 被隱藏就不顯示 summary（但仍允許 console）
+  if (AppState?.flags?.hideDebug) return;
+
+  const sum = document.getElementById('debugSummary');
+  if (!sum) return;
+
+  // 建立 / 取得 context badge
+  let badge = document.getElementById('debugMode');
+  if (!badge) {
+    badge = document.createElement('span');
+    badge.id = 'debugMode';
+    sum.appendChild(badge);
+  }
+
+  const meta = AppState?.cached?.meta || {};
+  const rawMode =
+    (typeof getMetaValueCaseInsensitive === 'function'
+      ? (getMetaValueCaseInsensitive(meta, '模式') || getMetaValueCaseInsensitive(meta, 'mode') || '')
+      : (meta['模式'] || meta['mode'] || '')
+    );
+
+  const modeValue = String(rawMode || '').trim();
+
+  // 若 meta 沒有模式，給一個「推測」字樣，避免使用者誤判
+  let inferred = '';
+  let modeLabel = modeValue;
+
+  if (!modeLabel) {
+    if (Array.isArray(AppState.availableViews) && AppState.availableViews.includes('schedule')) {
+      modeLabel = '行程';
+      inferred = '(推測)';
+    } else if (Array.isArray(AppState.availableViews) && AppState.availableViews.includes('shopping')) {
+      modeLabel = '採購清單';
+      inferred = '(推測)';
+    } else {
+      modeLabel = '一般';
+      inferred = '(推測)';
+    }
+  }
+
+  const view = AppState.currentView || '(unknown)';
+  const onePage = AppState.onePageMode ? '一頁式' : '單日';
+  const gid = AppState.currentGid ? ` gid=${AppState.currentGid}` : '';
+  badge.textContent = `mode=${modeLabel}${inferred} | view=${view} | ${onePage}${gid}`;
 }
 
 /** 是否像 CSV/TSV（至少兩行，某行含逗號或 tab） */
@@ -217,12 +273,15 @@ function isMetaRow(row) {
   const k = String(row[0] ?? '').trim().toLowerCase();
   if (!k) return false;
   const keys = [
-    '模式', 'mode',
-    '備註', 'note', 'notes',
-    '日期', 'date',
-    '日程表', '行程表', 'days',
-    '標題', '頁面標題', 'title', 'pagetitle', 'page title'
-  ].map((x) => String(x).toLowerCase());
+  '模式', 'mode',
+  '備註', 'note', 'notes',
+  '日期', 'date',
+  '日程表', '行程表', 'days',
+  '總議程', 'master agenda', 'masteragenda',
+  '相關議程', 'related agenda', 'relatedagenda',
+  '多相關議程', 'multi related agenda', 'multirelatedagenda',
+  '標題', '頁面標題', 'title', 'pagetitle', 'page title'
+].map((x) => String(x).toLowerCase());
   return keys.includes(k);
 }
 
@@ -233,6 +292,81 @@ function getMetaValueCaseInsensitive(meta, key) {
     if (String(k).toLowerCase() === lk) return v;
   }
   return '';
+}
+
+
+
+/* ============ 總議程 / 相關議程（依 gid 內的「模式」判斷類型） ============ */
+
+function isLikelyUrl(s) {
+  return /^https?:\/\//i.test(String(s || '').trim());
+}
+
+function normalizeMetaKeyName(k) {
+  return String(k || '').trim().toLowerCase();
+}
+
+// 從 meta 取出「原始欄位陣列」（若有保存），否則退回 meta[key] 字串拆 token
+function getMetaRowTokens(meta, key) {
+  if (!meta) return [];
+  const want = normalizeMetaKeyName(key);
+  const rows = meta.__rows || {};
+  for (const [k, arr] of Object.entries(rows)) {
+    if (normalizeMetaKeyName(k) === want && Array.isArray(arr)) {
+      return arr
+        .map((x) => String(x ?? '').trim())
+        .flatMap((cell) => String(cell || '').split(/[\s,，、;；\n\r]+/))
+        .map((t) => t.trim())
+        .filter(Boolean);
+    }
+  }
+
+  const raw = getMetaValueCaseInsensitive(meta, key) || '';
+  return String(raw)
+    .split(/[\s,，、;；\n\r]+/)
+    .map((t) => t.trim())
+    .filter(Boolean);
+}
+
+// 解析總議程/相關議程 token（gid 或 URL）
+function parseAgendaItemsFromMeta(meta, key) {
+  const tokens = getMetaRowTokens(meta, key);
+  const items = [];
+  for (const t of tokens) {
+    if (/^\d+$/.test(t)) {
+      items.push({ kind: 'gid', gid: t, url: '' });
+      continue;
+    }
+    if (isLikelyUrl(t)) {
+      const gid = extractGid(t);
+      items.push({ kind: 'url', gid: gid || '', url: t });
+      continue;
+    }
+  }
+  // 去重（以 gid 優先；沒有 gid 的 URL 用 url）
+  const seen = new Set();
+  return items.filter((it) => {
+    const key = it.gid ? `gid:${it.gid}` : `url:${it.url}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function hasPersonalCode1912() {
+  const p = new URLSearchParams(location.search);
+  return p.get('code') === '1912';
+}
+
+// 依 gid 內的 meta['模式'] 判斷類型：personal/note/shopping/other
+function classifyAgendaTypeByMode(modeValue) {
+  const m = String(modeValue || '').trim();
+  if (!m) return 'note';
+  if (m.includes('個人') && m.includes('注意')) return 'personal';
+  if (m.includes('採購') || m.includes('購物') || /shopping/i.test(m)) return 'shopping';
+  if (m.includes('注意')) return 'note';
+  // 沒命中：為了「不要整排消失」，預設歸到 注意事項
+  return 'note';
 }
 
 // 行程模式：找含「時刻表/schedule」那列當 header
@@ -381,20 +515,32 @@ async function loadFromText(csvText) {
     if (!rows || rows.length === 0) throw new Error('CSV 為空');
 
     // step1: 掃前幾列 meta
-    const meta = {};
-    let cursor = 0;
-    for (let i = 0; i < Math.min(rows.length, 6); i++) {
-      if (!isMetaRow(rows[i])) break;
-      const k = String(rows[i][0] ?? '').trim();
-      const vals = (rows[i].slice(1) || [])
-        .map((x) => String(x ?? '').trim())
-        .filter(Boolean);
-      if (k && vals.length) {
-        const joined = vals.join('\n');
-        meta[k] = meta[k] ? meta[k] + '\n' + joined : joined;
-      }
-      cursor = i + 1;
-    }
+const meta = {};
+meta.__rows = {}; // 保留原始欄位（給「總議程/相關議程」用）
+let cursor = 0;
+for (let i = 0; i < Math.min(rows.length, 30); i++) {
+  if (!isMetaRow(rows[i])) break;
+
+  const k = String(rows[i][0] ?? '').trim();
+  const rawCells = (rows[i].slice(1) || []).map((x) => String(x ?? '').trim()); // 不 filter，保留空欄位
+  const filtered = rawCells.filter(Boolean);
+
+  // 保存 agenda 原始欄位（格子不固定，但必須保留 token 位置）
+  const lk = normalizeMetaKeyName(k);
+  if (lk === '總議程' || lk === '相關議程' || lk === '多相關議程' ||
+      lk === 'master agenda' || lk === 'related agenda' || lk === 'multi related agenda' ||
+      lk === 'masteragenda' || lk === 'relatedagenda' || lk === 'multirelatedagenda') {
+    meta.__rows[k] = rawCells;
+  }
+
+  // 其他 meta 照舊用「非空」拼接
+  if (k && filtered.length) {
+    const joined = filtered.join('\n');
+    meta[k] = meta[k] ? meta[k] + '\n' + joined : joined;
+  }
+
+  cursor = i + 1;
+}
 
     // step2: 決定 header 列
     const modeValue = (getMetaValueCaseInsensitive(meta, '模式') || getMetaValueCaseInsensitive(meta, 'mode') || '')
@@ -447,19 +593,27 @@ async function loadFromText(csvText) {
       AppState.navDays = { gids: [], index: -1 };
     }
 
-    // step4: 視圖決策
+    // step4: 視圖決策（修正：採購清單走 shopping）
     if (/^行程$/i.test(modeValue)) {
       AppState.availableViews = ['schedule', 'list', 'raw'];
       AppState.currentView = 'schedule';
+    } else if (/^採購清單$/i.test(modeValue)) {
+      AppState.availableViews = ['shopping', 'list', 'raw'];
+      AppState.currentView = 'shopping';
     } else {
       AppState.availableViews = ['grid', 'list', 'raw'];
       AppState.currentView = 'grid';
     }
 
+    updateDebugSummaryContext();
+
     buildViewToggle();
     updateOnePageButtonVisibility();
     statusEl.textContent = `解析完成：${data.length} 筆（標題列索引 ${headerIndex}）`;
     renderCurrentView();
+
+    // 單頁：相關議程按鈕（非阻塞）
+    hydrateRelatedAgenda();
   } catch (err) {
     console.error('解析錯誤：', err);
     logDebug(['[loadFromText] 解析錯誤', String(err.stack || err)]);
@@ -606,7 +760,7 @@ function parseCsvTextToCached(csvText) {
   // step1: 掃前幾列 meta
   const meta = {};
   let cursor = 0;
-  for (let i = 0; i < Math.min(rows.length, 6); i++) {
+  for (let i = 0; i < Math.min(rows.length, 30); i++) {
     if (!isMetaRow(rows[i])) break;
     const k = String(rows[i][0] ?? '').trim();
     const vals = (rows[i].slice(1) || [])
@@ -730,9 +884,7 @@ function renderOnePageFromState() {
 
   hideDayNavBarForOnePage();
 
-  const gids = AppState.onePageData?.gids || [];
-  const caches = AppState.onePageData?.caches || [];
-
+  const sections = AppState.onePageData?.sections || [];
   out.innerHTML = '';
 
   const wrap = document.createElement('div');
@@ -742,6 +894,7 @@ function renderOnePageFromState() {
   if (!document.getElementById('onepage-style')) {
     const s = document.createElement('style');
     s.id = 'onepage-style';
+    // 參考你提供的 onePage 外觀：每段都用卡片包覆（header + body）
     s.textContent = `
       .onepage-wrap{ display:flex; flex-direction:column; gap:18px; }
       .onepage-day{
@@ -766,18 +919,48 @@ function renderOnePageFromState() {
     document.head.appendChild(s);
   }
 
-  for (let i = 0; i < caches.length; i++) {
-    const cached = caches[i];
-    const gid = gids[i] || '';
-    const date = (cached?.meta && (cached.meta['日期'] || cached.meta['date'])) ? String(cached.meta['日期'] || cached.meta['date']).trim() : '';
+  // 將既有 renderer（會寫入 #out）導向到指定容器
+  function renderInto(container, rendererFn, cachedObj) {
+    if (typeof rendererFn !== 'function') {
+      container.textContent = '缺少 renderer';
+      return;
+    }
+    const realOut = document.getElementById('out');
+    const realOutId = realOut ? realOut.id : 'out';
+
+    if (realOut) realOut.id = 'out_real';
+    const temp = document.createElement('div');
+    temp.id = 'out';
+    container.appendChild(temp);
+
+    try {
+      rendererFn(cachedObj);
+    } finally {
+      const rendered = temp.innerHTML;
+      temp.remove();
+      container.innerHTML += rendered;
+      if (realOut) realOut.id = realOutId;
+    }
+  }
+
+  for (let i = 0; i < sections.length; i++) {
+    const sec = sections[i];
+    const cached = sec.cached;
+    const gid = sec.gid || '';
+    const date = (cached?.meta && (cached.meta['日期'] || cached.meta['date']))
+      ? String(cached.meta['日期'] || cached.meta['date']).trim()
+      : '';
 
     const day = document.createElement('div');
     day.className = 'onepage-day';
 
     const head = document.createElement('div');
     head.className = 'onepage-day-header';
+
+    // 左側：標題；右側：日期 + gid
+    const leftTitle = sec.title || `第${i + 1}段`;
     head.innerHTML = `
-      <div>第${i + 1}天</div>
+      <div>${escapeHtml(String(leftTitle))}</div>
       <small>${date ? escapeHtml(date) + ' · ' : ''}gid=${escapeHtml(String(gid))}</small>
     `;
 
@@ -788,31 +971,18 @@ function renderOnePageFromState() {
     day.appendChild(body);
     wrap.appendChild(day);
 
-    // 只渲染行程（若該天不是行程模式，就顯示簡易預覽）
-    const modeValue = (cached?.meta && (getMetaValueCaseInsensitive(cached.meta, '模式') || getMetaValueCaseInsensitive(cached.meta, 'mode'))) || '';
-    const isSchedule = /^行程$/i.test(String(modeValue).trim());
+    const modeValue = getMetaValueCaseInsensitive(cached?.meta || {}, '模式') || '';
 
-    if (isSchedule && typeof window.renderSchedule === 'function') {
-      // renderSchedule 固定使用 #out；這裡用「暫時換 id」的方式，讓它渲染到 body
-      const temp = document.createElement('div');
-      body.appendChild(temp);
-
-      const realOut = document.getElementById('out');
-      const realOutId = realOut ? realOut.id : 'out';
-
-      if (realOut) realOut.id = 'out_real';
-
-      temp.id = 'out';
-      try {
-        window.renderSchedule(cached);
-      } finally {
-        const rendered = temp.innerHTML;
-        temp.remove();
-        body.innerHTML = rendered;
-
-        if (realOut) realOut.id = realOutId;
-      }
+    if (/^採購清單$/i.test(String(modeValue).trim()) && typeof window.renderShopping === 'function') {
+      renderInto(body, window.renderShopping, cached);
+    } else if (/^行程$/i.test(String(modeValue).trim()) && typeof window.renderSchedule === 'function') {
+      renderInto(body, window.renderSchedule, cached);
+    } else if (typeof window.renderGrid === 'function') {
+      renderInto(body, window.renderGrid, cached);
+    } else if (typeof window.renderRaw === 'function') {
+      renderInto(body, window.renderRaw, cached);
     } else {
+      // fallback：簡易預覽
       const pre = document.createElement('pre');
       pre.style.cssText = 'max-width:100%;overflow:auto;background:#f6f8fa;padding:12px;border-radius:10px;';
       pre.textContent = JSON.stringify(
@@ -824,7 +994,7 @@ function renderOnePageFromState() {
     }
   }
 
-  if (statusEl) statusEl.textContent = `一頁式：共 ${caches.length} 天`;
+  if (statusEl) statusEl.textContent = `一頁式：共 ${sections.length} 段`;
 }
 
 async function fetchAllSchedulesForOnePage() {
@@ -833,22 +1003,21 @@ async function fetchAllSchedulesForOnePage() {
 
   const template = (tplEl?.value || '').trim();
   const cached = AppState.cached;
-  const gids = parseDayGidsFromMeta(cached?.meta || {});
+  const dayGids = parseDayGidsFromMeta(cached?.meta || {});
 
-  if (!gids.length) throw new Error('meta 未提供日程表（gids）');
+  if (!dayGids.length) throw new Error('meta 未提供日程表（gids）');
+
+  // 一頁式同時載入「總議程」+「日程表」
+  const masterItems = parseAgendaItemsFromMeta(cached?.meta || {}, '總議程');
 
   // 沒有模板時，至少用 docId 組出 export URL
   const docId = AppState.currentDocId || sanitizeDocId(DEFAULT_DOC_ID) || '';
-  if (!template && !docId) throw new Error('缺少模板與 docId，無法載入全部日程表');
+  if (!template && !docId) throw new Error('缺少模板與 docId，無法載入一頁式');
 
   AppState.onePageLoading = true;
   updateOnePageButtonVisibility();
 
-  const caches = [];
-  for (let i = 0; i < gids.length; i++) {
-    const gid = gids[i];
-    if (statusEl) statusEl.textContent = `一頁式載入中：${i + 1} / ${gids.length}（gid=${gid}）`;
-
+  async function fetchOneByGid(gid) {
     const url = template
       ? buildUrlFromTemplate(template, gid)
       : `https://docs.google.com/spreadsheets/d/${encodeURIComponent(docId)}/export?format=csv&gid=${encodeURIComponent(gid)}`;
@@ -856,12 +1025,62 @@ async function fetchAllSchedulesForOnePage() {
     const resp = await fetch(url, { cache: 'no-store', redirect: 'follow', credentials: 'omit', mode: 'cors' });
     if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText} (gid=${gid})`);
     const text = await resp.text();
-
     const parsed = parseCsvTextToCached(text);
-    caches.push({ header: parsed.header, data: parsed.data, meta: parsed.meta });
+    return { header: parsed.header, data: parsed.data, meta: parsed.meta, modeValue: parsed.modeValue };
   }
 
-  AppState.onePageData = { gids, caches };
+  // 1) 載入總議程（依「模式」分類成 3 類；顯示順序固定）
+  const masterBuckets = { personal: null, note: null, shopping: null, other: [] };
+  for (let i = 0; i < masterItems.length; i++) {
+    const it = masterItems[i];
+    const gid = it.gid;
+    if (!gid) continue;
+
+    // 個人注意事項需要 code=1912
+    if (!hasPersonalCode1912()) {
+      // 先抓到模式再決定要不要略過；但為了效能先不 fetch，直接略過 personal 類
+      // 若你希望即使沒 code 也先 fetch 再判斷，可再調整
+    }
+
+    if (statusEl) statusEl.textContent = `一頁式載入總議程：${i + 1} / ${masterItems.length}（gid=${gid}）`;
+    const c = await fetchOneByGid(gid);
+
+    const t = classifyAgendaTypeByMode(c.modeValue);
+    if (t === 'personal' && !hasPersonalCode1912()) continue;
+
+    if (t === 'personal' && !masterBuckets.personal) masterBuckets.personal = { gid, cached: c };
+    else if (t === 'note' && !masterBuckets.note) masterBuckets.note = { gid, cached: c };
+    else if (t === 'shopping' && !masterBuckets.shopping) masterBuckets.shopping = { gid, cached: c };
+    else masterBuckets.other.push({ gid, cached: c });
+  }
+
+  // 2) 載入日程表全部天數
+  const dayCaches = [];
+  for (let i = 0; i < dayGids.length; i++) {
+    const gid = dayGids[i];
+    if (statusEl) statusEl.textContent = `一頁式載入日程表：${i + 1} / ${dayGids.length}（gid=${gid}）`;
+    const c = await fetchOneByGid(gid);
+    dayCaches.push({ gid, cached: c });
+  }
+
+  // 3) 組合 sections：先 master（固定順序），再 day（原順序）
+  const sections = [];
+  if (masterBuckets.personal) sections.push({ kind: 'agenda', title: '個人注意事項', ...masterBuckets.personal });
+  if (masterBuckets.note) sections.push({ kind: 'agenda', title: '注意事項', ...masterBuckets.note });
+  if (masterBuckets.shopping) sections.push({ kind: 'agenda', title: '採購清單', ...masterBuckets.shopping });
+
+  for (const o of masterBuckets.other) {
+    const title = (getMetaValueCaseInsensitive(o.cached.meta, '標題') || '').trim() || '總議程';
+    sections.push({ kind: 'agenda', title, gid: o.gid, cached: o.cached });
+  }
+
+  for (let i = 0; i < dayCaches.length; i++) {
+    const d = dayCaches[i];
+    const date = (d.cached.meta && (d.cached.meta['日期'] || d.cached.meta['date'])) ? String(d.cached.meta['日期'] || d.cached.meta['date']).trim() : '';
+    sections.push({ kind: 'day', title: `第${i + 1}天${date ? ' · ' + date : ''}`, gid: d.gid, cached: d.cached });
+  }
+
+  AppState.onePageData = { sections };
 }
 
 async function toggleOnePageMode() {
@@ -872,6 +1091,7 @@ async function toggleOnePageMode() {
     AppState.onePageMode = false;
     AppState.onePageData = { gids: [], caches: [] };
     updateOnePageButtonVisibility();
+    updateDebugSummaryContext();
     renderCurrentView();
     return;
   }
@@ -897,6 +1117,7 @@ async function toggleOnePageMode() {
   } finally {
     AppState.onePageLoading = false;
     updateOnePageButtonVisibility();
+    updateDebugSummaryContext();
   }
 }
 
@@ -921,15 +1142,20 @@ function navigateDayOffset(delta) {
   navigateDayTo(i);
 }
 
-// 建立或更新分頁列（只在 schedule/list/raw 顯示；grid 隱藏）
+// 建立或更新分頁列（只在 schedule/list/raw 顯示；grid/shopping 隱藏）
 function buildDayNavBar() {
   const meta = AppState?.cached?.meta || {};
   const gids = parseDayGidsFromMeta(meta);
-  const showForView = AppState.currentView !== 'grid';
+
+  const showForView = ['schedule', 'list', 'raw'].includes(AppState.currentView);
   const shouldShow = !!(gids.length && showForView);
 
   let mountAfter = document.getElementById('viewToggle');
   let nav = document.getElementById('dayNav');
+
+  // 相關議程按鈕列（要在 dayNav 上方）
+  const relatedBar = ensureRelatedAgendaBar();
+
   if (!nav) {
     nav = document.createElement('div');
     nav.id = 'dayNav';
@@ -956,6 +1182,16 @@ function buildDayNavBar() {
       `;
       document.head.appendChild(s);
     }
+
+// 確保 relatedAgendaBar 在 dayNav 上方
+if (nav && relatedBar && nav.parentElement) {
+  if (relatedBar.parentElement !== nav.parentElement) {
+    nav.parentElement.insertBefore(relatedBar, nav);
+  } else if (relatedBar.nextSibling !== nav) {
+    nav.parentElement.insertBefore(relatedBar, nav);
+  }
+}
+
   }
 
   if (!shouldShow) {
@@ -994,6 +1230,186 @@ function buildDayNavBar() {
   if (nextBtn) nextBtn.onclick = () => navigateDayOffset(1);
 }
 
+
+
+/* ============ 單頁：相關議程按鈕（天數列上方） ============ */
+
+AppState.relatedAgenda = {
+  items: null,           // {personal:{gid}, note:{gid}, shopping:{gid}}
+  loading: false,
+  returnTo: null         // {gid, view}
+};
+
+function ensureRelatedAgendaBar() {
+  let bar = document.getElementById('relatedAgendaBar');
+  if (bar) return bar;
+
+  bar = document.createElement('div');
+  bar.id = 'relatedAgendaBar';
+  bar.style.display = 'none';
+
+  if (!document.getElementById('relatedAgendaBar-style')) {
+    const s = document.createElement('style');
+    s.id = 'relatedAgendaBar-style';
+    s.textContent = `
+      #relatedAgendaBar{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin: 8px 0 6px; }
+      #relatedAgendaBar .btn{
+        padding:6px 10px; border-radius:8px; border:1px solid #e5e7eb;
+        background:#fff; cursor:pointer; font-size:13px; font-weight:700;
+      }
+      #relatedAgendaBar .btn.primary{ background:#111827; color:#fff; border-color:#111827; }
+      #relatedAgendaBar .btn[disabled]{ opacity:.45; cursor:not-allowed; }
+    `;
+    document.head.appendChild(s);
+  }
+
+  // 預設插在 viewToggle 後面；之後會在 buildDayNavBar 時移到 dayNav 上方
+  const mountAfter = document.getElementById('viewToggle');
+  if (mountAfter && mountAfter.parentElement) {
+    mountAfter.parentElement.insertBefore(bar, mountAfter.nextSibling);
+  } else {
+    const out = document.getElementById('out');
+    (out?.parentElement || document.body).insertBefore(bar, out || null);
+  }
+  return bar;
+}
+
+function renderRelatedAgendaBar() {
+  const bar = ensureRelatedAgendaBar();
+  const meta = AppState.cached?.meta || {};
+  const relatedItems = parseAgendaItemsFromMeta(meta, '相關議程');
+
+  // 沒有相關議程：隱藏
+  if (!relatedItems.length && !AppState.relatedAgenda.returnTo) {
+    bar.style.display = 'none';
+    bar.innerHTML = '';
+    return;
+  }
+
+  // 先渲染骨架（可先顯示「採購清單」等按鈕，待分類完成再更新）
+  bar.style.display = '';
+  bar.innerHTML = '';
+
+  // 返回
+  if (AppState.relatedAgenda.returnTo) {
+    const back = document.createElement('button');
+    back.className = 'btn primary';
+    back.textContent = '返回';
+    back.onclick = async () => {
+      const rt = AppState.relatedAgenda.returnTo;
+      AppState.relatedAgenda.returnTo = null;
+
+      const gidEl = document.getElementById('gidInput');
+      if (gidEl) gidEl.value = rt.gid;
+      AppState.currentGid = rt.gid;
+      updateUrlParam('gid', rt.gid);
+
+      await loadFromUrlTemplate();
+
+      // 回到原 view（若可用）
+      if (rt.view && AppState.availableViews.includes(rt.view)) {
+        AppState.currentView = rt.view;
+        buildViewToggle();
+        renderCurrentView();
+      }
+    };
+    bar.appendChild(back);
+  }
+
+  // 若已完成分類，依固定順序顯示三顆
+  const buckets = AppState.relatedAgenda.items;
+  if (buckets) {
+    const order = [
+      { key: 'personal', label: '個人注意事項', needCode: true },
+      { key: 'note', label: '注意事項', needCode: false },
+      { key: 'shopping', label: '採購清單', needCode: false }
+    ];
+    for (const o of order) {
+      const it = buckets[o.key];
+      if (!it || !it.gid) continue;
+      if (o.needCode && !hasPersonalCode1912()) continue;
+
+      const b = document.createElement('button');
+      b.className = 'btn';
+      b.textContent = o.label;
+      b.onclick = async () => {
+        // 記錄返回點（只記第一次）
+        if (!AppState.relatedAgenda.returnTo) {
+          AppState.relatedAgenda.returnTo = { gid: AppState.currentGid, view: AppState.currentView };
+        }
+
+        const gidEl = document.getElementById('gidInput');
+        if (gidEl) gidEl.value = it.gid;
+        AppState.currentGid = it.gid;
+        updateUrlParam('gid', it.gid);
+
+        await loadFromUrlTemplate();
+      };
+      bar.appendChild(b);
+    }
+    return;
+  }
+
+  // 尚未分類：先顯示「載入中」提示
+  const tip = document.createElement('span');
+  tip.style.cssText = 'color:#6b7280;font-size:12px;font-weight:700;';
+  tip.textContent = relatedItems.length ? '相關議程載入中…' : '';
+  bar.appendChild(tip);
+}
+
+async function hydrateRelatedAgenda() {
+  const meta = AppState.cached?.meta || {};
+  const items = parseAgendaItemsFromMeta(meta, '相關議程');
+  if (!items.length) {
+    AppState.relatedAgenda.items = null;
+    AppState.relatedAgenda.loading = false;
+    renderRelatedAgendaBar();
+    return;
+  }
+
+  if (AppState.relatedAgenda.loading) return;
+  AppState.relatedAgenda.loading = true;
+  AppState.relatedAgenda.items = null;
+  renderRelatedAgendaBar();
+
+  const tplEl = document.getElementById('csvTemplate');
+  const template = (tplEl?.value || '').trim();
+  const docId = AppState.currentDocId || sanitizeDocId(DEFAULT_DOC_ID) || '';
+
+  async function fetchOneByGid(gid) {
+    const url = template
+      ? buildUrlFromTemplate(template, gid)
+      : `https://docs.google.com/spreadsheets/d/${encodeURIComponent(docId)}/export?format=csv&gid=${encodeURIComponent(gid)}`;
+
+    const resp = await fetch(url, { cache: 'no-store', redirect: 'follow', credentials: 'omit', mode: 'cors' });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText} (gid=${gid})`);
+    const text = await resp.text();
+    const parsed = parseCsvTextToCached(text);
+    return parsed.modeValue;
+  }
+
+  try {
+    const buckets = { personal: null, note: null, shopping: null };
+
+    for (const it of items) {
+      if (!it.gid) continue;
+      const mode = await fetchOneByGid(it.gid);
+      const t = classifyAgendaTypeByMode(mode);
+      if (t === 'personal' && !buckets.personal) buckets.personal = { gid: it.gid };
+      else if (t === 'note' && !buckets.note) buckets.note = { gid: it.gid };
+      else if (t === 'shopping' && !buckets.shopping) buckets.shopping = { gid: it.gid };
+    }
+
+    AppState.relatedAgenda.items = buckets;
+  } catch (e) {
+    logDebug(['[relatedAgenda] hydrate error', String(e.stack || e)]);
+    AppState.relatedAgenda.items = null;
+  } finally {
+    AppState.relatedAgenda.loading = false;
+    renderRelatedAgendaBar();
+  }
+}
+
 /* ============ 視圖切換 / 渲染 ============ */
 
 function renderCurrentView() {
@@ -1001,6 +1417,7 @@ function renderCurrentView() {
   try {
     buildDayNavBar();
     updateOnePageButtonVisibility();
+    renderRelatedAgendaBar();
 
     if (AppState.onePageMode) {
       return renderOnePageFromState();
@@ -1013,6 +1430,8 @@ function renderCurrentView() {
         return window.renderList(AppState.cached);
       case 'schedule':
         return window.renderSchedule(AppState.cached);
+      case 'shopping':
+        return window.renderShopping(AppState.cached);
       default:
         return window.renderRaw(AppState.cached);
     }
@@ -1034,6 +1453,7 @@ function switchView(view) {
   }
 
   AppState.currentView = view;
+  updateDebugSummaryContext();
   document.querySelectorAll('#viewToggle button').forEach((btn) => {
     btn.classList.toggle('active', btn.dataset.view === view);
   });
@@ -1055,7 +1475,9 @@ function buildViewToggle() {
           ? '詳細清單'
           : v === 'schedule'
             ? '行程'
-            : '原始讀取';
+            : v === 'shopping'
+              ? '採購清單'
+              : '原始讀取';
     if (i === 0) btn.classList.add('active');
     btn.addEventListener('click', () => switchView(v));
     ctr.appendChild(btn);
@@ -1112,7 +1534,7 @@ function initializeFromUrlParams() {
   const docId = sanitizeDocId(getDocIdFromUrl());
   if (docId) AppState.currentDocId = docId;
 
-  // 初始視圖（若提供 view=schedule/list/raw/grid）
+  // 初始視圖（若提供 view=schedule/list/raw/grid/shopping）
   const view = (p.get('view') || '').toLowerCase();
   if (view) AppState.currentView = view;
 

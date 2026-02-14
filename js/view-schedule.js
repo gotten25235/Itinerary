@@ -23,8 +23,13 @@
  * - 金額欄位可為多行：逐行處理；有幣別才換算，其他行原樣保留
  *
  * 本次需求：
- * - 時刻表只有 !（含全形 ！）→ 顯示灰色，並排序放最下面（在 ? / ？ 之後）
- * - 新增欄位：隱藏（hide/hidden）→ 若該欄位有填值，該筆行程不顯示
+* - 新增欄位：顯示模式（display mode）
+*   - 0 => 隱藏（不顯示）
+*   - 1 => 刪除線
+*   - 2 => 顯示灰色 + 排序放最下面（在 ? / ？ 之後）
+*   - 可複數：例如 "1,2" / "1，2"（刪除線 + 灰色 + 排最下面）
+*   - 空值 => 正常顯示
+* - 時刻表排序：? / ？ 視為較晚；若顯示模式包含 2，該筆固定排在最下面
  */
 
 /* escapeHtml 由 csv-parser.js 提供（window.escapeHtml） */
@@ -360,7 +365,7 @@ function showCopyToast(msg) {
 }
 
 /* =========================
- * Schedule sort / hide rules
+ * Schedule sort / display mode rules
  * ========================= */
 
 function isUnknownScheduleTime(v) {
@@ -368,13 +373,9 @@ function isUnknownScheduleTime(v) {
   return s === '?' || s === '？';
 }
 
-function isAtScheduleTime(v) {
-  const s = String(v || '').trim();
-  return s === '!' || s === '！';
-}
-
-function scheduleTimeRank(v) {
-  if (isAtScheduleTime(v)) return 2;      // 最後
+function scheduleTimeRank(v, displayFlags) {
+  // displayFlags: { hide:boolean, strike:boolean, grayBottom:boolean }
+  if (displayFlags && displayFlags.grayBottom) return 2;      // 最後
   if (isUnknownScheduleTime(v)) return 1; // 倒數第二
   return 0;
 }
@@ -382,6 +383,29 @@ function scheduleTimeRank(v) {
 function hasNonEmptyValue(v) {
   return String(v ?? '').trim().length > 0;
 }
+
+/**
+ * 顯示模式欄位規則：
+ * - 0 => 隱藏（不顯示）
+ * - 1 => 刪除線（顯示但刪除線）
+ * - 2 => 顯示灰色 + 排序放最下面
+ * - 可複數使用：例如 "1,2" / "1，2"
+ * - 空值 => 正常顯示
+ */
+function parseDisplayModeFlags(v) {
+  const s = String(v ?? '').trim();
+  if (!s) return { hide: false, strike: false, grayBottom: false };
+
+  const parts = s.split(/[,，\s]+/u).map(x => x.trim()).filter(Boolean);
+  const set = new Set(parts);
+
+  return {
+    hide: set.has('0'),
+    strike: set.has('1'),
+    grayBottom: set.has('2'),
+  };
+}
+
 
 /* =========================
  * Main render
@@ -400,6 +424,8 @@ function renderSchedule(cached) {
   }
 
   const keyTime = header[0];
+    // 顯示模式（0 隱藏 / 1 刪除線 / 2 灰色+排最下面；可複數：1,2）
+  const keyDisplayMode = pickField(header, ['顯示模式', 'display mode', 'display_mode', 'mode']);
   const keyType = pickField(header, ['類型', 'type', '分類', 'category']);
   const keyName = pickField(header, ['名稱', 'name', 'title', '主題', '景點']) || header[1] || header[0];
 
@@ -417,26 +443,28 @@ function renderSchedule(cached) {
   const keyReviews = collectReviewKeys(header);
 
   const keyImage = pickField(header, ['圖片', '圖片網址', '照片', 'image', 'img', 'thumbnail', 'photo', 'pic', '圖']);
+  const keySummary = pickField(header, ['摘要', 'summary']);
   const keyNote = pickField(header, ['備註', 'note']);
 
-  // 新增：隱藏欄位（有值即不顯示）
-  const keyHide = pickField(header, ['隱藏', 'hide', 'hidden']);
 
-  // 先過濾「隱藏」的項目
-  const visibleData = keyHide
-    ? data.filter((row) => !hasNonEmptyValue(row[keyHide]))
-    : data;
 
-  // 排序規則：
+// 先過濾「顯示模式=0」的項目
+const visibleData = keyDisplayMode
+  ? data.filter((row) => !parseDisplayModeFlags(row[keyDisplayMode]).hide)
+  : data;
+
+// 排序規則：
   // - 時刻欄位只有 ? / ？ => 放後面
-  // - 時刻欄位只有 ! / ！ => 放最下面（且在 ? 後面）
-  // - 其他照原本字串排序
+    // - 其他照原本字串排序
   const sorted = [...visibleData].sort((a, b) => {
     const ta = String(a[keyTime] || '').trim();
     const tb = String(b[keyTime] || '').trim();
 
-    const ra = scheduleTimeRank(ta);
-    const rb = scheduleTimeRank(tb);
+    const fa = keyDisplayMode ? parseDisplayModeFlags(a[keyDisplayMode]) : { hide:false, strike:false, grayBottom:false };
+    const fb = keyDisplayMode ? parseDisplayModeFlags(b[keyDisplayMode]) : { hide:false, strike:false, grayBottom:false };
+
+    const ra = scheduleTimeRank(ta, fa);
+    const rb = scheduleTimeRank(tb, fb);
     if (ra !== rb) return ra - rb;
 
     return ta.localeCompare(tb);
@@ -485,6 +513,7 @@ function renderSchedule(cached) {
     const reviewButtons = buildReviewButtons(reviewUrlObjs);
     const firstReviewUrl = (reviewUrlObjs[0] && reviewUrlObjs[0].url) ? reviewUrlObjs[0].url : '';
 
+    const summary = keySummary ? (item[keySummary] || '') : '';
     const note = keyNote ? (item[keyNote] || '') : '';
     const img = keyImage ? firstImageUrl(item[keyImage]) : '';
 
@@ -494,13 +523,15 @@ function renderSchedule(cached) {
 
     const timeSectionClasses = ['schedule-time-section'];
     if (isUnknownScheduleTime(time)) timeSectionClasses.push('has-plus'); // 既有：紅色
-    if (isAtScheduleTime(time)) timeSectionClasses.push('has-at');        // 本次：灰色
 
     const bgUrl = siteUrl || firstReviewUrl || '';
 
-    html += `<div class="schedule-item ${bgUrl ? 'is-clickable' : ''}" data-site="${escapeHtml(siteUrl)}" data-reviews="${escapeHtml(firstReviewUrl)}">`;
-
-    html += `<div class="schedule-topbar ${hasHours ? '' : 'is-empty'}">
+    const itemFlags = keyDisplayMode ? parseDisplayModeFlags(item[keyDisplayMode]) : { hide:false, strike:false, grayBottom:false };
+const itemClasses = ['schedule-item'];
+if (itemFlags.strike) itemClasses.push('is-strike');
+if (itemFlags.grayBottom) itemClasses.push('is-gray');
+html += `<div class="${itemClasses.join(' ')}">`;
+html += `<div class="schedule-topbar ${hasHours ? '' : 'is-empty'}">
       <span class="topbar-label">營業時間：</span>
       <span class="topbar-value">${hasHours ? escapeHtml(String(hoursText)) : '&nbsp;'}</span>
     </div>`;
@@ -520,6 +551,16 @@ function renderSchedule(cached) {
                     title="點一下複製地點">${escapeHtml(String(locDisplay))}</div>`;
     }
     if (priceHtml) html += `<div class="schedule-price"><strong>${priceHtml}</strong></div>`;
+    if (summary) {
+      const summaryHtml = String(summary)
+        .split(/\r?\n/)       // 偵測換行（支援 Windows / Mac）
+        .map(s => s.trim())
+        .filter(Boolean)
+        .map(s => escapeHtml(s))
+        .join('<br>');
+    
+      html += `<div class="schedule-summary">${summaryHtml}</div>`;
+    }
     if (note) html += `<div class="schedule-note">${escapeHtml(String(note))}</div>`;
     html += `</div>`;
 
@@ -612,20 +653,20 @@ function renderSchedule(cached) {
       e.stopPropagation();
     });
 
-    out.addEventListener('click', (e) => {
-      const item = e.target.closest('.schedule-item');
-      if (!item) return;
+    // out.addEventListener('click', (e) => {
+    //   const item = e.target.closest('.schedule-item');
+    //   if (!item) return;
 
-      const interactiveSel = '.sched-img, .sched-btn, .copy-addr, a, button, input, textarea, select, label';
-      if (e.target.closest(interactiveSel)) return;
+    //   const interactiveSel = '.sched-img, .sched-btn, .copy-addr, a, button, input, textarea, select, label';
+    //   if (e.target.closest(interactiveSel)) return;
 
-      const site = (item.getAttribute('data-site') || '').trim();
-      const firstReview = (item.getAttribute('data-reviews') || '').trim();
-      const url = site || firstReview;
-      if (!url) return;
+    //   const site = (item.getAttribute('data-site') || '').trim();
+    //   const firstReview = (item.getAttribute('data-reviews') || '').trim();
+    //   const url = site || firstReview;
+    //   if (!url) return;
 
-      window.open(url, '_blank', 'noopener');
-    });
+    //   window.open(url, '_blank', 'noopener');
+    // });
   }
 
   const styleId = 'schedule-style-v10';
@@ -662,6 +703,7 @@ function renderSchedule(cached) {
     .schedule-name.is-optional{ color:#ef4444; }
     .schedule-location{ font-size:13px; color:#374151; }
     .schedule-price{ color:#2563eb; font-weight:700; line-height:1.25; }
+    .schedule-summary{ color:#6b7280; font-size:13px; }
     .schedule-note{ color:#ef4444; font-size:13px; }
 
     .copy-addr{ cursor:pointer; position:relative; }
@@ -681,6 +723,18 @@ function renderSchedule(cached) {
     }
     .sched-btn:hover{ background:#f9fafb; }
     .sched-img{ cursor:zoom-in; }
+
+    /* 顯示模式：刪除線（包含 1） */
+    .schedule-item.is-strike .schedule-time,
+    .schedule-item.is-strike .schedule-info{
+      text-decoration: line-through;
+      text-decoration-thickness: 2px;
+    }
+
+    /* 顯示模式：灰色 + 排最後（包含 2） */
+    .schedule-item.is-gray{ opacity: .55; }
+    .schedule-item.is-gray .schedule-time-section{ background:#9ca3af; }
+
 
     .copy-toast{
       position:fixed; z-index:9999; top:14px; right:14px;
@@ -749,7 +803,12 @@ function renderSchedule(cached) {
 
       .schedule-time-section{ display:flex; align-items:center; justify-content:center; border-radius:8px; background:#2563eb; color:#fff; }
       .schedule-time-section.has-plus{ background:#ef4444; color:#fff; }
-      .schedule-time-section.has-at{ background:#9ca3af; color:#fff; }
+      .schedule-item.is-gray .schedule-time-section{ background:#9ca3af; color:#fff; }
+      .schedule-item.is-gray{ color:#6b7280; }
+      .schedule-item.is-gray .schedule-price{ color:#6b7280; }
+      .schedule-item.is-gray .schedule-name.is-required{ color:#6b7280; }
+      .schedule-item.is-gray .schedule-name.is-optional{ color:#6b7280; }
+
       .schedule-time{ font-weight:700; font-size:18px; padding:6px 10px; }
       .schedule-time{ display:flex; flex-direction:column; align-items:center; justify-content:center; line-height:1.15; }
       .schedule-time > span{ display:block; }
