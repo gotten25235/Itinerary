@@ -943,6 +943,33 @@ function renderOnePageFromState() {
     }
   }
 
+
+  function patchScheduleBlueTitle(container, cachedObj) {
+    const meta = cachedObj?.meta || {};
+    const title = (getMetaValueCaseInsensitive(meta, '標題') || getMetaValueCaseInsensitive(meta, 'title') || '').toString().trim();
+    if (!title) return;
+
+    // 優先找常見的標題節點
+    const candidates = container.querySelectorAll('h1,h2,h3,.view-title,.title,[class*="title"]');
+    for (const el of candidates) {
+      const t = (el.textContent || '').toString().trim();
+      if (t === '行程') {
+        el.textContent = title;
+        return;
+      }
+    }
+
+    // 後備：找第一個文字為「行程」的元素
+    const all = container.querySelectorAll('*');
+    for (const el of all) {
+      const t = (el.textContent || '').toString().trim();
+      if (t === '行程') {
+        el.textContent = title;
+        return;
+      }
+    }
+  }
+
   for (let i = 0; i < sections.length; i++) {
     const sec = sections[i];
     const cached = sec.cached;
@@ -961,7 +988,7 @@ function renderOnePageFromState() {
     const leftTitle = sec.title || `第${i + 1}段`;
     head.innerHTML = `
       <div>${escapeHtml(String(leftTitle))}</div>
-      <small>${date ? escapeHtml(date) + ' · ' : ''}gid=${escapeHtml(String(gid))}</small>
+      <small>gid=${escapeHtml(String(gid))}</small>
     `;
 
     const body = document.createElement('div');
@@ -977,6 +1004,7 @@ function renderOnePageFromState() {
       renderInto(body, window.renderShopping, cached);
     } else if (/^行程$/i.test(String(modeValue).trim()) && typeof window.renderSchedule === 'function') {
       renderInto(body, window.renderSchedule, cached);
+      patchScheduleBlueTitle(body, cached);
     } else if (typeof window.renderGrid === 'function') {
       renderInto(body, window.renderGrid, cached);
     } else if (typeof window.renderRaw === 'function') {
