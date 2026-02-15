@@ -1,6 +1,8 @@
 // filename: js/view-grid.js
 'use strict';
 
+const U = (typeof window !== 'undefined' && window.UtilsCopy) ? window.UtilsCopy : null;
+
 /**
  * 圖片九宮格（可切換分組：依「類型」或依「地點別稱」）
  * 顯示：圖片、名稱、地點（可點複製）、營業時間、金額
@@ -143,6 +145,7 @@ function buildReviewButtons(urls) {
 
 /** 從地址中抓出「XX區」 */
 function extractDistrict(addr = '') {
+  if (U && typeof U.extractDistrict === 'function') return U.extractDistrict(addr);
   const s = String(addr || '').trim();
   if (!s) return null;
 
@@ -163,18 +166,17 @@ function extractDistrict(addr = '') {
  * - 若包含中文且有空白：取空白前（例：國立臺灣科學教育館 七樓... -> 國立臺灣科學教育館）
  */
 function normalizeAliasForGroup(alias = '') {
+  if (U && typeof U.normalizeAliasForGroup === 'function') return U.normalizeAliasForGroup(alias);
+
   let s = String(alias || '').trim();
   if (!s) return '';
 
-  // 1) 只取第一行
   const lines = s.split(/\r?\n/).map(x => x.trim()).filter(Boolean);
   s = lines.length ? lines[0] : s;
 
-  // 2) 只取第一段（常見分隔符）
   const segs = s.split(/[、,;\/|]+/).map(x => x.trim()).filter(Boolean);
   s = segs.length ? segs[0] : s;
 
-  // 3) 若含中文且有空白 -> 取空白前（符合你舉例）
   const hasCjk = /[\u4e00-\u9fff]/.test(s);
   if (hasCjk) {
     const i = s.indexOf(' ');
@@ -329,6 +331,8 @@ function buildPriceDisplayHtml(priceRaw, priceNtRaw) {
 
 /** 穩定 32-bit hash（用於選取狀態持久化） */
 function hash32(str) {
+  if (U && typeof U.hash32 === 'function') return U.hash32(str);
+
   const s = String(str || '');
   let h = 5381;
   for (let i = 0; i < s.length; i++) {
@@ -340,6 +344,8 @@ function hash32(str) {
 
 /** 依目前 groupMode 決定分組 key */
 function groupKeyForItem(item, fieldKeys, groupMode) {
+  if (U && typeof U.groupKeyForItem === 'function') return U.groupKeyForItem(item, fieldKeys, groupMode);
+
   const type = fieldKeys.type ? String(item[fieldKeys.type] || '').trim() : '';
   const loc = fieldKeys.location ? String(item[fieldKeys.location] || '').trim() : '';
   const aliasRaw = fieldKeys.locationAlias ? String(item[fieldKeys.locationAlias] || '').trim() : '';
@@ -353,6 +359,8 @@ function groupKeyForItem(item, fieldKeys, groupMode) {
 }
 
 function groupData(data, fieldKeys, groupMode) {
+  if (U && typeof U.groupData === 'function') return U.groupData(data, fieldKeys, groupMode);
+
   const map = new Map();
   data.forEach(it => {
     const g = groupKeyForItem(it, fieldKeys, groupMode);
@@ -363,6 +371,8 @@ function groupData(data, fieldKeys, groupMode) {
 }
 
 async function copyTextToClipboard(text) {
+  if (U && typeof U.copyTextToClipboard === 'function') return U.copyTextToClipboard(text);
+
   const s = String(text || '');
   if (!s) return false;
 
@@ -395,17 +405,15 @@ async function copyTextToClipboard(text) {
 function buildSelectedText(selectedIds, idMap) {
   if (!selectedIds || !selectedIds.size) return '';
 
-  const lines = [];
+  const items = [];
   for (const id of selectedIds) {
     const it = idMap.get(id);
     if (!it) continue;
-
-    const t = String(it.type || '').trim();
-    const n = String(it.name || '').trim();
-    const line = [t, n].filter(Boolean).join(' ').trim();
-    if (line) lines.push(line);
+    items.push({ type: String(it.type || '').trim(), name: String(it.name || '').trim() });
   }
-  return lines.join('\n');
+
+  if (U && typeof U.buildCopyText === 'function') return U.buildCopyText(items);
+  return items.map(x => [x.type, x.name].filter(Boolean).join(' ').trim()).filter(Boolean).join('\n');
 }
 
 function updateCopyButtonUI(root) {

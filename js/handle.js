@@ -36,6 +36,15 @@
 const DEFAULT_DOC_ID = '1DuMk9-kPO_FmXGOyunTcGGC1Rquoova5Q6DCTr5Z_A8';
 
 const AppState = {
+  // 注意事項：個人注意事項需要 URL 帶 code 才可顯示
+  noteRequireCode: false,
+  noteCodeParam: 'code',
+
+  // 個人視圖：網址需帶 ?code=1912 才可顯示
+  personalRequireCode: false,
+  personalCodeParam: 'code',
+  personalCodeValue: '1912',
+
   cached: null,
   currentView: 'raw',
   availableViews: [],
@@ -355,16 +364,28 @@ function parseAgendaItemsFromMeta(meta, key) {
 
 function hasPersonalCode1912() {
   const p = new URLSearchParams(location.search);
-  return p.get('code') === '1912';
+  const raw = String(p.get('code') || '').trim();
+  const set = new Set(raw.split(/[,\s，]+/u).map(s => s.trim()).filter(Boolean));
+  return set.has('1912');
 }
+
 
 // 依 gid 內的 meta['模式'] 判斷類型：personal/note/shopping/other
 function classifyAgendaTypeByMode(modeValue) {
   const m = String(modeValue || '').trim();
   if (!m) return 'note';
-  if (m.includes('個人') && m.includes('注意')) return 'personal';
-  if (m.includes('採購') || m.includes('購物') || /shopping/i.test(m)) return 'shopping';
-  if (m.includes('注意')) return 'note';
+
+  const lower = m.toLowerCase();
+
+  const isPersonal = m.includes('個人') || /personal/i.test(m);
+  const isShopping = m.includes('採購') || m.includes('購物') || /shopping/i.test(lower);
+  const isNote = m.includes('注意') || /note/i.test(lower);
+
+  if (isPersonal && isShopping) return 'personal_shopping';
+  if (isPersonal && isNote) return 'personal_note';
+  if (isShopping) return 'shopping';
+  if (isNote) return 'note';
+
   // 沒命中：為了「不要整排消失」，預設歸到 注意事項
   return 'note';
 }
@@ -593,16 +614,57 @@ for (let i = 0; i < Math.min(rows.length, 30); i++) {
       AppState.navDays = { gids: [], index: -1 };
     }
 
-    // step4: 視圖決策（修正：採購清單走 shopping）
-    if (/^行程$/i.test(modeValue)) {
-      AppState.availableViews = ['schedule', 'list', 'raw'];
-      AppState.currentView = 'schedule';
-    } else if (/^採購清單$/i.test(modeValue)) {
-      AppState.availableViews = ['shopping', 'list', 'raw'];
-      AppState.currentView = 'shopping';
-    } else {
-      AppState.availableViews = ['grid', 'list', 'raw'];
-      AppState.currentView = 'grid';
+    // step4: 視圖決策（行程 / 採購清單 / 注意事項 + 個人視圖 code gate）
+    {
+      const modeRaw = (modeValue || '').toString().trim();
+      const mode = modeRaw.toLowerCase();
+
+      // reset
+      AppState.noteRequireCode = false;
+      AppState.personalRequireCode = false;
+
+      const isSchedule =
+        modeRaw === '行程' || mode.includes('行程') || /schedule/i.test(modeRaw);
+
+      const isShopping =
+        modeRaw === '採購清單' || mode.includes('採購') || mode.includes('購物') || /shopping/i.test(modeRaw);
+
+      const isNote =
+        modeRaw === '注意事項' || mode.includes('注意事項') || mode.includes('注意') || /note/i.test(modeRaw);
+
+      // 個人視圖：任何包含「個人」的模式都走相同 code gate
+      const isPersonal = mode.includes('個人');
+
+      // 特定：個人注意事項 / 個人採購清單
+      const isPersonalNote =
+        modeRaw === '個人注意事項' || (isPersonal && mode.includes('注意')) || /personal\s*note/i.test(modeRaw);
+
+      const isPersonalShopping =
+        modeRaw === '個人採購清單' || (isPersonal && (mode.includes('採購') || mode.includes('購物'))) || /personal\s*shopping/i.test(modeRaw);
+
+      // 設定 personal gate
+      if (isPersonal) {
+        AppState.personalRequireCode = true;
+      }
+
+      if (isSchedule) {
+        AppState.availableViews = ['schedule', 'list', 'raw'];
+        AppState.currentView = 'schedule';
+      } else if (isPersonalShopping || isShopping) {
+        AppState.availableViews = ['shopping', 'list', 'raw'];
+        AppState.currentView = 'shopping';
+      } else if (isPersonalNote || isNote) {
+        AppState.availableViews = ['note', 'list', 'raw'];
+        AppState.currentView = 'note';
+      } else {
+        AppState.availableViews = ['grid', 'list', 'raw'];
+        AppState.currentView = 'grid';
+      }
+
+      // 舊旗標相容：個人注意事項仍會觸發 noteRequireCode（但實際 gate 以 personal 為準）
+      if (isPersonalNote) {
+        AppState.noteRequireCode = true;
+      }
     }
 
     updateDebugSummaryContext();
@@ -999,9 +1061,12 @@ function renderOnePageFromState() {
     wrap.appendChild(day);
 
     const modeValue = getMetaValueCaseInsensitive(cached?.meta || {}, '模式') || '';
+    const t = classifyAgendaTypeByMode(modeValue);
 
-    if (/^採購清單$/i.test(String(modeValue).trim()) && typeof window.renderShopping === 'function') {
+    if ((t === 'shopping' || t === 'personal_shopping') && typeof window.renderShopping === 'function') {
       renderInto(body, window.renderShopping, cached);
+    } else if ((t === 'note' || t === 'personal_note') && typeof window.renderNote === 'function') {
+      renderInto(body, window.renderNote, cached);
     } else if (/^行程$/i.test(String(modeValue).trim()) && typeof window.renderSchedule === 'function') {
       renderInto(body, window.renderSchedule, cached);
       patchScheduleBlueTitle(body, cached);
@@ -1058,7 +1123,7 @@ async function fetchAllSchedulesForOnePage() {
   }
 
   // 1) 載入總議程（依「模式」分類成 3 類；顯示順序固定）
-  const masterBuckets = { personal: null, note: null, shopping: null, other: [] };
+  const masterBuckets = { personal_note: null, personal_shopping: null, note: null, shopping: null, other: [] };
   for (let i = 0; i < masterItems.length; i++) {
     const it = masterItems[i];
     const gid = it.gid;
@@ -1074,9 +1139,12 @@ async function fetchAllSchedulesForOnePage() {
     const c = await fetchOneByGid(gid);
 
     const t = classifyAgendaTypeByMode(c.modeValue);
-    if (t === 'personal' && !hasPersonalCode1912()) continue;
 
-    if (t === 'personal' && !masterBuckets.personal) masterBuckets.personal = { gid, cached: c };
+    // 個人視圖：需要 code=1912
+    if ((t === 'personal_note' || t === 'personal_shopping') && !hasPersonalCode1912()) continue;
+
+    if (t === 'personal_note' && !masterBuckets.personal_note) masterBuckets.personal_note = { gid, cached: c };
+    else if (t === 'personal_shopping' && !masterBuckets.personal_shopping) masterBuckets.personal_shopping = { gid, cached: c };
     else if (t === 'note' && !masterBuckets.note) masterBuckets.note = { gid, cached: c };
     else if (t === 'shopping' && !masterBuckets.shopping) masterBuckets.shopping = { gid, cached: c };
     else masterBuckets.other.push({ gid, cached: c });
@@ -1093,7 +1161,8 @@ async function fetchAllSchedulesForOnePage() {
 
   // 3) 組合 sections：先 master（固定順序），再 day（原順序）
   const sections = [];
-  if (masterBuckets.personal) sections.push({ kind: 'agenda', title: '個人注意事項', ...masterBuckets.personal });
+  if (masterBuckets.personal_note) sections.push({ kind: 'agenda', title: '個人注意事項', ...masterBuckets.personal_note });
+  if (masterBuckets.personal_shopping) sections.push({ kind: 'agenda', title: '個人採購清單', ...masterBuckets.personal_shopping });
   if (masterBuckets.note) sections.push({ kind: 'agenda', title: '注意事項', ...masterBuckets.note });
   if (masterBuckets.shopping) sections.push({ kind: 'agenda', title: '採購清單', ...masterBuckets.shopping });
 
@@ -1263,10 +1332,12 @@ if (nav && relatedBar && nav.parentElement) {
 /* ============ 單頁：相關議程按鈕（天數列上方） ============ */
 
 AppState.relatedAgenda = {
-  items: null,           // {personal:{gid}, note:{gid}, shopping:{gid}}
+  // 依 gid 內的「模式」分類：personal_note / personal_shopping / note / shopping
+  items: null,           // {personal_note:{gid}, personal_shopping:{gid}, note:{gid}, shopping:{gid}}
   loading: false,
   returnTo: null         // {gid, view}
 };
+
 
 function ensureRelatedAgendaBar() {
   let bar = document.getElementById('relatedAgendaBar');
@@ -1347,8 +1418,9 @@ function renderRelatedAgendaBar() {
   // 若已完成分類，依固定順序顯示三顆
   const buckets = AppState.relatedAgenda.items;
   if (buckets) {
-    const order = [
-      { key: 'personal', label: '個人注意事項', needCode: true },
+        const order = [
+      { key: 'personal_note', label: '個人注意事項', needCode: true },
+      { key: 'personal_shopping', label: '個人採購清單', needCode: true },
       { key: 'note', label: '注意事項', needCode: false },
       { key: 'shopping', label: '採購清單', needCode: false }
     ];
@@ -1417,13 +1489,15 @@ async function hydrateRelatedAgenda() {
   }
 
   try {
-    const buckets = { personal: null, note: null, shopping: null };
+    const buckets = { personal_note: null, personal_shopping: null, note: null, shopping: null };
 
     for (const it of items) {
       if (!it.gid) continue;
       const mode = await fetchOneByGid(it.gid);
       const t = classifyAgendaTypeByMode(mode);
-      if (t === 'personal' && !buckets.personal) buckets.personal = { gid: it.gid };
+
+      if (t === 'personal_note' && !buckets.personal_note) buckets.personal_note = { gid: it.gid };
+      else if (t === 'personal_shopping' && !buckets.personal_shopping) buckets.personal_shopping = { gid: it.gid };
       else if (t === 'note' && !buckets.note) buckets.note = { gid: it.gid };
       else if (t === 'shopping' && !buckets.shopping) buckets.shopping = { gid: it.gid };
     }
@@ -1460,6 +1534,10 @@ function renderCurrentView() {
         return window.renderSchedule(AppState.cached);
       case 'shopping':
         return window.renderShopping(AppState.cached);
+      case 'note':
+        return window.renderNote(AppState.cached);
+      case 'note':
+        return window.renderNote(AppState.cached);
       default:
         return window.renderRaw(AppState.cached);
     }
@@ -1505,7 +1583,9 @@ function buildViewToggle() {
             ? '行程'
             : v === 'shopping'
               ? '採購清單'
-              : '原始讀取';
+              : v === 'note'
+                ? '注意事項'
+                : '原始讀取';
     if (i === 0) btn.classList.add('active');
     btn.addEventListener('click', () => switchView(v));
     ctr.appendChild(btn);
