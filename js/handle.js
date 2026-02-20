@@ -2,35 +2,35 @@
 'use strict';
 
 /**
- * Handle（docId 預設 + 可由 URL 覆蓋、無關鍵字啟發式表頭、寬鬆偵錯）
+ * handle.js（載入/解析/視圖切換/一頁式整合）
  *
- * Doc ID 來源優先序：
- *  1) URL query: ?docId=...（別名：doc / doc_id）
- *  2) Template 欄位若貼了 Google Sheets URL，從 /d/{docId}/ 抽出
+ * 這個檔案是整個頁面的控制中心，主要負責：
+ * - 解析 URL 參數（docId / gid / view / code / hide ...）
+ * - 組出 Google Sheets CSV export URL 並載入
+ * - 解析 CSV：辨識 meta 區（標題/模式/備註/日期/日程表...）與 header/data
+ * - 依「模式」決定可用視圖與預設視圖，並呼叫對應的 renderer
+ * - 支援「日程表」多 gid 導覽（上一頁/下一頁、第 N 天）
+ * - 支援「一頁式」：一次載入日程表中所有 gid 並依序渲染
+ *
+ * docId 來源優先序：
+ *  1) URL query：?docId=...（別名：doc / doc_id）
+ *  2) 使用者貼入的 template URL：從 /d/{docId}/ 抽出
  *  3) DEFAULT_DOC_ID
  *
  * gid 來源：
  *  1) gid 輸入框
- *  2) Template 字串中抽 gid=
+ *  2) template 字串中抽取 gid=
  *
- * 匯出 URL：
- *  https://docs.google.com/spreadsheets/d/{docId}/export?format=csv&gid={gid}
+ * 視圖決策（高階邏輯；細節以實際程式判斷為準）：
+ * - 模式=行程     → 預設 schedule（並提供 list/raw）
+ * - 模式=採購清單 → 預設 shopping（並提供 list/raw）
+ * - 模式=注意事項 → 預設 note（並提供 list/raw）
+ * - 其他         → 預設 grid（並提供 list/raw）
  *
- * 解析：
- *  - 前幾列像 meta（模式/備註/日期/日程表/標題）才當 meta
- *  - 行程模式：找含「時刻表/schedule」那列當 header
- *  - 其他模式：純啟發式偵測最像表頭的一列
- *
- * 視圖：
- *  - 模式=行程     -> ['schedule','list','raw']（預設 schedule）
- *  - 模式=採購清單 -> ['shopping','list','raw']（預設 shopping）
- *  - 否則          -> ['grid','list','raw']（預設 grid）
- *
- * 新增：
- *  - meta 有「日程表」欄（放多個 gid）時，在 schedule/list/raw 顯示「上一頁／下一頁（第N天）」分頁
- *  - 表頭偵測時同步偵測「標題」，覆蓋頁面標題（h2#pageTitle + document.title）
- *  - 右上角「一頁式」按鈕：一次載入並顯示全部日程表（依 meta['日程表'] gid 清單）
+ * 權限/顯示控制：
+ * - 個人相關模式是否可見、以及 Card 顯示模式=3 的 code gate，皆以 URL 的 ?code=... 交由共用邏輯處理（參考 view-card-base.js / handle.js 內的判斷）。
  */
+
 
 // 預設 Spreadsheet Doc ID（若 URL 或 Template 有提供 docId，會覆蓋）
 const DEFAULT_DOC_ID = '1DuMk9-kPO_FmXGOyunTcGGC1Rquoova5Q6DCTr5Z_A8';
@@ -282,15 +282,15 @@ function isMetaRow(row) {
   const k = String(row[0] ?? '').trim().toLowerCase();
   if (!k) return false;
   const keys = [
-  '模式', 'mode',
-  '備註', 'note', 'notes',
-  '日期', 'date',
-  '日程表', '行程表', 'days',
-  '總議程', 'master agenda', 'masteragenda',
-  '相關議程', 'related agenda', 'relatedagenda',
-  '多相關議程', 'multi related agenda', 'multirelatedagenda',
-  '標題', '頁面標題', 'title', 'pagetitle', 'page title'
-].map((x) => String(x).toLowerCase());
+    '模式', 'mode',
+    '備註', 'note', 'notes',
+    '日期', 'date',
+    '日程表', '行程表', 'days',
+    '總議程', 'master agenda', 'masteragenda',
+    '相關議程', 'related agenda', 'relatedagenda',
+    '多相關議程', 'multi related agenda', 'multirelatedagenda',
+    '標題', '頁面標題', 'title', 'pagetitle', 'page title'
+  ].map((x) => String(x).toLowerCase());
   return keys.includes(k);
 }
 
@@ -482,12 +482,12 @@ function buildUrlFromTemplate(template, gid) {
 
     // 1) 支援 placeholder：{docId}/{DOC_ID}/{doc}/{gid} 這類
     u = u.replaceAll('{docId}', docId)
-         .replaceAll('{DOC_ID}', docId)
-         .replaceAll('{doc}', docId)
-         .replaceAll('{DOC}', docId);
+      .replaceAll('{DOC_ID}', docId)
+      .replaceAll('{doc}', docId)
+      .replaceAll('{DOC}', docId);
 
     u = u.replaceAll('{gid}', g)
-         .replaceAll('{GID}', g);
+      .replaceAll('{GID}', g);
 
     // 2) 強制把 /spreadsheets/d/<任意非斜線>/ 替換成正確 docId
     //    這個會吃掉 /d/{gid}/ 這種錯誤寫法
@@ -536,32 +536,32 @@ async function loadFromText(csvText) {
     if (!rows || rows.length === 0) throw new Error('CSV 為空');
 
     // step1: 掃前幾列 meta
-const meta = {};
-meta.__rows = {}; // 保留原始欄位（給「總議程/相關議程」用）
-let cursor = 0;
-for (let i = 0; i < Math.min(rows.length, 30); i++) {
-  if (!isMetaRow(rows[i])) break;
+    const meta = {};
+    meta.__rows = {}; // 保留原始欄位（給「總議程/相關議程」用）
+    let cursor = 0;
+    for (let i = 0; i < Math.min(rows.length, 30); i++) {
+      if (!isMetaRow(rows[i])) break;
 
-  const k = String(rows[i][0] ?? '').trim();
-  const rawCells = (rows[i].slice(1) || []).map((x) => String(x ?? '').trim()); // 不 filter，保留空欄位
-  const filtered = rawCells.filter(Boolean);
+      const k = String(rows[i][0] ?? '').trim();
+      const rawCells = (rows[i].slice(1) || []).map((x) => String(x ?? '').trim()); // 不 filter，保留空欄位
+      const filtered = rawCells.filter(Boolean);
 
-  // 保存 agenda 原始欄位（格子不固定，但必須保留 token 位置）
-  const lk = normalizeMetaKeyName(k);
-  if (lk === '總議程' || lk === '相關議程' || lk === '多相關議程' ||
-      lk === 'master agenda' || lk === 'related agenda' || lk === 'multi related agenda' ||
-      lk === 'masteragenda' || lk === 'relatedagenda' || lk === 'multirelatedagenda') {
-    meta.__rows[k] = rawCells;
-  }
+      // 保存 agenda 原始欄位（格子不固定，但必須保留 token 位置）
+      const lk = normalizeMetaKeyName(k);
+      if (lk === '總議程' || lk === '相關議程' || lk === '多相關議程' ||
+        lk === 'master agenda' || lk === 'related agenda' || lk === 'multi related agenda' ||
+        lk === 'masteragenda' || lk === 'relatedagenda' || lk === 'multirelatedagenda') {
+        meta.__rows[k] = rawCells;
+      }
 
-  // 其他 meta 照舊用「非空」拼接
-  if (k && filtered.length) {
-    const joined = filtered.join('\n');
-    meta[k] = meta[k] ? meta[k] + '\n' + joined : joined;
-  }
+      // 其他 meta 照舊用「非空」拼接
+      if (k && filtered.length) {
+        const joined = filtered.join('\n');
+        meta[k] = meta[k] ? meta[k] + '\n' + joined : joined;
+      }
 
-  cursor = i + 1;
-}
+      cursor = i + 1;
+    }
 
     // step2: 決定 header 列
     const modeValue = (getMetaValueCaseInsensitive(meta, '模式') || getMetaValueCaseInsensitive(meta, 'mode') || '')
@@ -944,6 +944,11 @@ function renderOnePageFromState() {
   const statusEl = document.getElementById('status');
   if (!out) return;
 
+  // 一頁式：不顯示「相關議程」按鈕列（避免從單日殘留）
+  const bar = document.getElementById('relatedAgendaBar');
+  if (bar) { bar.style.display = 'none'; bar.innerHTML = ''; }
+  AppState.relatedAgenda.returnTo = null;
+
   hideDayNavBarForOnePage();
 
   const sections = AppState.onePageData?.sections || [];
@@ -987,10 +992,14 @@ function renderOnePageFromState() {
       container.textContent = '缺少 renderer';
       return;
     }
+
     const realOut = document.getElementById('out');
     const realOutId = realOut ? realOut.id : 'out';
 
+    // 1) 把真正的 #out 暫時改名，避免 id 衝突
     if (realOut) realOut.id = 'out_real';
+
+    // 2) 建立臨時 #out，直接掛在目標 container 底下，讓 renderer 正常渲染與綁事件
     const temp = document.createElement('div');
     temp.id = 'out';
     container.appendChild(temp);
@@ -998,9 +1007,10 @@ function renderOnePageFromState() {
     try {
       rendererFn(cachedObj);
     } finally {
-      const rendered = temp.innerHTML;
-      temp.remove();
-      container.innerHTML += rendered;
+      // 3) 渲染完成後：拿掉 temp 的 id（避免一頁式出現多個 #out），但保留 DOM 與事件
+      temp.removeAttribute('id');
+
+      // 4) 還原真正的 #out id
       if (realOut) realOut.id = realOutId;
     }
   }
@@ -1280,14 +1290,14 @@ function buildDayNavBar() {
       document.head.appendChild(s);
     }
 
-// 確保 relatedAgendaBar 在 dayNav 上方
-if (nav && relatedBar && nav.parentElement) {
-  if (relatedBar.parentElement !== nav.parentElement) {
-    nav.parentElement.insertBefore(relatedBar, nav);
-  } else if (relatedBar.nextSibling !== nav) {
-    nav.parentElement.insertBefore(relatedBar, nav);
-  }
-}
+    // 確保 relatedAgendaBar 在 dayNav 上方
+    if (nav && relatedBar && nav.parentElement) {
+      if (relatedBar.parentElement !== nav.parentElement) {
+        nav.parentElement.insertBefore(relatedBar, nav);
+      } else if (relatedBar.nextSibling !== nav) {
+        nav.parentElement.insertBefore(relatedBar, nav);
+      }
+    }
 
   }
 
@@ -1379,7 +1389,7 @@ function renderRelatedAgendaBar() {
   const relatedItems = parseAgendaItemsFromMeta(meta, '相關議程');
 
   // 沒有相關議程：隱藏
-  if (!relatedItems.length && !AppState.relatedAgenda.returnTo) {
+  if (AppState.onePageMode || (!relatedItems.length && !AppState.relatedAgenda.returnTo)) {
     bar.style.display = 'none';
     bar.innerHTML = '';
     return;
@@ -1418,7 +1428,7 @@ function renderRelatedAgendaBar() {
   // 若已完成分類，依固定順序顯示三顆
   const buckets = AppState.relatedAgenda.items;
   if (buckets) {
-        const order = [
+    const order = [
       { key: 'personal_note', label: '個人注意事項', needCode: true },
       { key: 'personal_shopping', label: '個人採購清單', needCode: true },
       { key: 'note', label: '注意事項', needCode: false },
@@ -1519,11 +1529,17 @@ function renderCurrentView() {
   try {
     buildDayNavBar();
     updateOnePageButtonVisibility();
-    renderRelatedAgendaBar();
 
+    // 一頁式：不要顯示「相關議程」按鈕列（因為一頁式內容已經包含）
     if (AppState.onePageMode) {
+      const bar = document.getElementById('relatedAgendaBar');
+      if (bar) { bar.style.display = 'none'; bar.innerHTML = ''; }
+      AppState.relatedAgenda.returnTo = null; // 避免殘留「返回」
       return renderOnePageFromState();
     }
+
+    // 單日才需要相關議程按鈕列
+    renderRelatedAgendaBar();
 
     switch (AppState.currentView) {
       case 'grid':

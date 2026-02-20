@@ -2,30 +2,27 @@
 'use strict';
 
 /**
- * Card View Base（共通模板）
+ * view-card-base.js（Card View Base / 共通模板）
  *
  * 目的：
- * - 讓 view-schedule / view-shopping / view-note 只保留「差異化」邏輯
+ * - 將 schedule/shopping/note 等「卡片式視圖」共用的欄位映射、DOM 結構與事件綁定集中管理
+ * - 各視圖只需要提供差異化設定（config），避免重複堆疊 UI 與互動細節
  *
  * 提供：
- * - SheetCardBase.createCardRenderer(config) 產生 renderer
- * - 共用欄位 mapping / URL 正規化 / 評論按鈕 / 顯示模式 / 圖片 modal / 複製 toast
+ * - SheetCardBase.createCardRenderer(config)：產生 renderer(cached)
+ * - 共用能力：欄位挑選、URL 正規化、評論按鈕拆分、顯示模式解析、圖片 modal、toast、Google Maps 連結
  *
- * 擴充點（config）：
- * - title: 預設標題（meta 無標題時用）
- * - topbarLabel: topbar 左文字（例：營業時間 / 資訊）
- * - mapKeys(header) => keys
- * - sortRows(rows, keysWithDisplayMode) => sortedRows
- * - renderLeftCell(row, idx, keys, flags) => HTML
- * - renderPriceHtml(row, idx, keys, flags, cached) => HTML（已 escape 的字串即可）
- * - getNameClasses(row, idx, keys, flags) => ['is-required', ...]
- * - getItemId(row, idx, keys, flags, cached) => string
- * - getItemExtraClasses(row, idx, keys, flags, cached) => ['is-selected', ...]
- * - getItemDataAttrs(row, idx, keys, flags, cached, derived) => { 'data-x': 'y', ... }
- * - beforeListHtml(cached, keys) => HTML（插在 list 前）
- * - onItemClick(ctx) => void
- * - afterRender(ctx) => void（可綁 toolbar / auto-import 等）
+ * 顯示模式（由 parseDisplayModeFlags 解析，允許以逗號/空白分隔複數）：
+ * - 0：hide（整列不渲染）
+ * - 1：strike（刪除線）
+ * - 2：grayBottom（灰色並排到最後；排序由各 view 控制）
+ * - 3：requireCode1912（變數名保留歷史命名；實際 gate 為「需要 URL code 含 666」才顯示）
+ *
+ * URL code（支援逗號多值）：?code=1912,666
+ * - 個人模式是否可見：由 handle.js 決策（依模式 + code set）
+ * - Card 顯示模式=3：此 base 只檢查 code 是否包含「666」
  */
+
 (function () {
   const esc = (typeof window.escapeHtml === 'function')
     ? window.escapeHtml
@@ -55,6 +52,15 @@
     if (/^\/\//.test(s)) return `https:${s}`;
     if (/^[a-z0-9.-]+\.[a-z]{2,}(\/.*)?$/i.test(s)) return `https://${s}`;
     return '';
+  }
+
+  /* ============ Money / Exchange (use utils-money.js) ============ */
+  function mustGetUtilsMoney() {
+    const um = (typeof window !== "undefined") ? window.UtilsMoney : null;
+    if (!um || typeof um.buildPriceDisplayHtml !== "function") {
+      throw new Error("UtilsMoney is required but not loaded. Please include js/utils-money.js before view-card-base.js");
+    }
+    return um;
   }
 
   function buildGoogleMapsSearchUrl(addr) {
@@ -163,20 +169,10 @@
       requireCode1912: set.has('3'), // 顯示模式=3：需要 ?code=1912 才顯示
     };
   }
-
-
-  function showToast(msg) {
-    let el = document.getElementById('copy-toast');
-    if (!el) {
-      el = document.createElement('div');
-      el.id = 'copy-toast';
-      el.className = 'copy-toast';
-      document.body.appendChild(el);
-    }
-    el.textContent = msg || '已複製';
-    el.classList.add('show');
-    clearTimeout(showToast._t);
-    showToast._t = setTimeout(() => el.classList.remove('show'), 1200);
+  function showToast(msg, ms) {
+    const UC = (typeof window !== 'undefined') ? window.UtilsCopy : null;
+    if (UC && typeof UC.showCopyToast === 'function') return UC.showCopyToast(msg, ms);
+    try { console.log('[toast]', msg); } catch {}
   }
 
   function ensureImageModalOnce() {
@@ -291,33 +287,6 @@
     /* 顯示模式：灰色 + 排最後（包含 2） */
     .schedule-item.is-gray{ opacity: .55; }
     .schedule-item.is-gray .schedule-time-section{ background:#9ca3af; }
-
-
-    .copy-toast{
-      position:fixed; z-index:9999; top:14px; right:14px;
-      background:rgba(17,24,39,.92); color:#fff;
-      padding:8px 12px; border-radius:10px; font-size:13px;
-      box-shadow:0 8px 20px rgba(0,0,0,.18);
-      opacity:0; transform:translateY(-6px);
-      transition:opacity .2s, transform .2s;
-    }
-    .copy-toast.show{ opacity:1; transform:translateY(0); }
-
-    .no-scroll{ overflow:hidden; }
-    .img-modal{ position:fixed; inset:0; z-index:10000; display:none; }
-    .img-modal.show{ display:block; }
-    .img-modal-backdrop{ position:absolute; inset:0; background:rgba(0,0,0,.62); }
-    .img-modal-panel{
-      position:absolute; left:50%; top:50%;
-      transform:translate(-50%,-50%);
-      width:min(92vw, 980px);
-      max-height:88vh;
-      background:#111827;
-      border-radius:14px;
-      box-shadow:0 16px 44px rgba(0,0,0,.38);
-      overflow:hidden;
-      display:flex; align-items:center; justify-content:center;
-    }
     .img-modal-img{
       width:100%; height:100%;
       max-height:88vh;
@@ -591,8 +560,15 @@
           const priceHtml = cfg.renderPriceHtml(row, idx, { ...keys, keyDisplayMode }, flags, cached) || '';
           if (priceHtml) html += `<div class="schedule-price"><strong>${priceHtml}</strong></div>`;
         } else if (keys.keyPrice) {
-          const p = t(row[keys.keyPrice]);
-          if (p) html += `<div class="schedule-price"><strong>${esc(p)}</strong></div>`;
+          const priceRaw = row[keys.keyPrice] || '';
+          const priceNtRaw = keys.keyPriceNt ? (row[keys.keyPriceNt] || '') : '';
+
+          // 若有「換算金額(NT)」欄位，套用共用換算顯示；否則照原字串顯示
+          const pHtml = keys.keyPriceNt
+            ? mustGetUtilsMoney().buildPriceDisplayHtml(priceRaw, priceNtRaw, esc)
+            : esc(t(priceRaw));
+
+          if (pHtml) html += `<div class="schedule-price"><strong>${pHtml}</strong></div>`;
         }
 
         if (summaryText) {

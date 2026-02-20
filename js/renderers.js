@@ -2,11 +2,14 @@
 'use strict';
 
 /**
- * ====== 目前只啟用「原始讀取」視圖 ======
- * 其餘視圖（grid/list/schedule/inspect）先保留空函式，避免干擾。
+ * renderers.js（保留：Raw / 相容匯出點）
+ *
+ * 目前此檔主要提供「raw」視圖（用來直接檢視解析後的 meta/header/data），以利除錯與驗證解析結果。
+ * 其他視圖（grid/schedule/shopping/note...）已各自拆到對應的 view-*.js，並透過 window.renderXxx 匯出給 handle.js 呼叫。
+ *
+ * 重要：此檔保留一些空函式匯出，僅為相容舊呼叫點或避免找不到 symbol；實際渲染請以 view-*.js 為準。
  */
 
-/** 原始讀取：直接顯示 header 與前 N 筆資料（表格 + JSON） */
 /**
  * 原始讀取：直接顯示 meta（模式/備註）、表頭與資料本體
  * - 不做任何欄位推斷或過濾

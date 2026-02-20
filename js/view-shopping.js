@@ -2,22 +2,62 @@
 'use strict';
 
 /**
- * 採購清單 view（差異化檔）
- * - 使用 SheetCardBase 共通模板產生 renderer
- * - 差異行為：
- *   - 點卡片背景：選取 / 取消選取（外框變色）
- *   - 點列表空白背景：清空選取（全部取消外框）
- *   - 分享：只分享已選取；優先 Web Share，不支援則複製分享文字
- *   - 匯出/匯入：round-trip（header/data/meta + selectedIds）
- *   - 自動剪貼簿匯入：focus / visibilitychange 嘗試讀取；僅 shopping 模式
+ * view-shopping.js（採購清單視圖）
+ *
+ * 同樣以 SheetCardBase.createCardRenderer(config) 為底，僅保留採購清單特有互動：
+ * - 卡片選取：點卡片背景切換選取狀態（以外框/陰影表示）
+ * - 點列表空白：清空全部選取
+ * - 分享：只分享已選取項目；優先使用 Web Share API，不支援則複製分享文字
+ * - 匯出/匯入：支援 round-trip（header/data/meta + selectedIds），便於備份或跨裝置
+ * - 自動匯入：在 focus / visibilitychange 嘗試讀取剪貼簿並解析選取（僅 shopping 模式）
+ *
+ * 文字格式與剪貼簿行為全部委派給 UtilsCopy：
+ * - 複製/匯入解析：buildCopyText / parseCopyText / matchPairsToIds
+ * - 分享文字：buildShoppingShareText
+ * - toast：showCopyToast
+ *
+ * 依賴：
+ * - window.SheetCardBase（view-card-base.js）
+ * - window.UtilsCopy（utils-copy.js）
  */
+
 
 (function () {
   const B = window.SheetCardBase;
   const U = window.UtilsCopy;
+
   if (!B) {
     console.error('[view-shopping] missing SheetCardBase (view-card-base.js)');
     return;
+  }
+  if (!U) {
+    console.error('[view-shopping] missing UtilsCopy (utils-copy.js)');
+    return;
+  }
+
+  // 強制依賴（缺就直接中止，以免 view 沒掛 renderer）
+  const _needFns = [
+    'showCopyToast',
+    'buildCopyText',
+    'parseCopyText',
+    'matchPairsToIds',
+    'buildShoppingShareText',
+  ];
+  for (const fn of _needFns) {
+    if (typeof U[fn] !== 'function') {
+      console.error('[view-shopping] UtilsCopy missing function:', fn);
+      return;
+    }
+  }
+  if (typeof U.copyTextToClipboardSync !== 'function' && typeof U.copyTextToClipboard !== 'function') {
+    console.error('[view-shopping] UtilsCopy missing clipboard function');
+    return;
+  }
+
+  function toast(msg) {
+    if (typeof U.showCopyToast === 'function') return U.showCopyToast(msg);
+    if (typeof B.showToast === 'function') return B.showToast(msg);
+    console.log('[toast]', msg);
   }
 
   function fnv1a32(str) {
@@ -32,7 +72,7 @@
   function getStableId(row, keyTime, keyName, keyType, keyAddr, keyLocAlias, keySite) {
     const time = B.t(row?.[keyTime]);
     const name = B.t(row?.[keyName]);
-    const typ  = B.t(row?.[keyType]);
+    const typ = B.t(row?.[keyType]);
     const addr = B.t(row?.[keyAddr]);
     const alias = B.t(row?.[keyLocAlias]);
     const site = B.normalizeUrl(row?.[keySite]);
@@ -42,57 +82,11 @@
 
   function buildRoundTrip(cached, allRows, selectedIds) {
     return {
-      meta: cached.meta || {},
-      header: cached.header || [],
+      meta: cached?.meta || {},
+      header: cached?.header || [],
       data: allRows || [],
       selectedIds: selectedIds || [],
     };
-  }
-
-  function buildShareText(meta, keyTime, keyType, keyName, keyLoc, keyAddr, keyPrice, keyPriceNt, keySite, keyNote, rows) {
-    const title = B.t(meta?.['標題'] || meta?.['title'] || '採購清單');
-    const date = B.t(meta?.['日期'] || meta?.['date'] || '');
-    let out = `【${title}】${date ? ' ' + date : ''}\n\n`;
-
-    rows.forEach((row, i) => {
-      const time = B.t(row?.[keyTime]);
-      const typ = B.t(row?.[keyType]);
-      const name = B.t(row?.[keyName]);
-      const loc = B.t(row?.[keyLoc]);
-      const addr = B.t(row?.[keyAddr]);
-      const note = B.t(row?.[keyNote]);
-      const price = B.t(row?.[keyPrice]);
-      const priceNt = B.t(row?.[keyPriceNt]);
-      const site = B.normalizeUrl(row?.[keySite]);
-
-      out += `${i + 1}. ${time ? `[${time}] ` : ''}${typ ? `(${typ}) ` : ''}${name}\n`;
-      if (loc || addr) out += `   地點：${loc || addr}\n`;
-      if (price || priceNt) out += `   金額：${priceNt || price}\n`;
-      if (note) out += `   備註：${note}\n`;
-      if (site) out += `   官網：${site}\n`;
-      out += `\n`;
-    });
-
-    return out.trim();
-  }
-
-  async function copyTextToClipboard(text) {
-    if (!text) return false;
-    try {
-      if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(text);
-        return true;
-      }
-      const ta = document.createElement('textarea');
-      ta.value = text;
-      document.body.appendChild(ta);
-      ta.select();
-      document.execCommand('copy');
-      document.body.removeChild(ta);
-      return true;
-    } catch {
-      return false;
-    }
   }
 
   function getSelectedSet() {
@@ -165,32 +159,44 @@
     });
   }
 
-  async function shareSelected() {
-    const last = window.renderShopping?._last;
-    if (!last) return;
-
+  function _pickedRowsFromLast(last) {
     const set = getSelectedSet();
     const picked = [];
     last.sorted.forEach((row, idx) => {
       const id = last.idByIndex?.[idx] || '';
       if (id && set.has(id)) picked.push(row);
     });
+    return picked;
+  }
 
+  async function shareSelected() {
+    const last = window.renderShopping?._last;
+    if (!last) return;
+
+    const picked = _pickedRowsFromLast(last);
     if (!picked.length) {
-      B.showToast('未選取項目');
+      toast('未選取項目');
       return;
     }
 
-    const meta = last.cached.meta || {};
+    const meta = last.cached?.meta || {};
     const k = last.keys;
 
-    const text = buildShareText(
-      meta, k.keyTime, k.keyType, k.keyName,
-      k.keyLocation, k.keyLocation,
-      k.keyPrice, k.keyPriceNt,
-      k.keySite, k.keyNote,
-      picked
-    );
+    const text = U.buildShoppingShareText({
+      meta,
+      keys: {
+        keyTime: k.keyTime,
+        keyType: k.keyType,
+        keyName: k.keyName,
+        keyLocation: k.keyLocation,
+        keyAddr: k.keyLocation, // shopping header 常把地點/地址合併，維持原邏輯
+        keyPrice: k.keyPrice,
+        keyPriceNt: k.keyPriceNt,
+        keySite: k.keySite,
+        keyNote: k.keyNote,
+      },
+      rows: picked,
+    });
 
     if (navigator.share) {
       try {
@@ -201,26 +207,22 @@
       }
     }
 
-    const ok = await copyTextToClipboard(text);
-    B.showToast(ok ? '已複製分享文字' : '分享失敗');
+    let ok = false;
+    if (typeof U.copyTextToClipboardSync === 'function') ok = U.copyTextToClipboardSync(text);
+    else ok = await U.copyTextToClipboard(text);
+
+    toast(ok ? '已複製分享文字' : '分享失敗');
   }
 
-  
   // ====== copy / import (text) ======
 
   async function copySelected() {
     const last = window.renderShopping?._last;
     if (!last) return;
 
-    const set = getSelectedSet();
-    const picked = [];
-    last.sorted.forEach((row, idx) => {
-      const id = last.idByIndex?.[idx] || '';
-      if (id && set.has(id)) picked.push(row);
-    });
-
+    const picked = _pickedRowsFromLast(last);
     if (!picked.length) {
-      B.showToast('未選取項目');
+      U.showCopyToast('未選取項目');
       return;
     }
 
@@ -230,21 +232,18 @@
       name: B.t(row?.[k.keyName]),
     }));
 
-    const text = (U && U.buildCopyText)
-      ? U.buildCopyText(items)
-      : items.map(x => [x.type, x.name].filter(Boolean).join(' ').trim()).join('\n');
+    const text = U.buildCopyText(items);
 
-    const ok = (U && U.copyTextToClipboard)
-      ? await U.copyTextToClipboard(text)
-      : await copyTextToClipboard(text);
+    let ok = false;
+    if (typeof U.copyTextToClipboardSync === 'function') ok = U.copyTextToClipboardSync(text);
+    else ok = await U.copyTextToClipboard(text);
 
-    B.showToast(ok ? '已複製' : '複製失敗');
+    U.showCopyToast(ok ? '已複製' : '複製失敗');
   }
 
-  function applyImportedSelectionFromText(text) {
+  function applyImportedSelectionFromText(text, rootOut) {
     const last = window.renderShopping?._last;
     if (!last) return { ok: false, n: 0 };
-    if (!U || !U.parseCopyText || !U.matchPairsToIds) return { ok: false, n: 0 };
 
     const parsed = U.parseCopyText(text);
     if (!parsed.ok) return { ok: false, n: 0 };
@@ -258,21 +257,41 @@
 
     window.renderShopping._selectedSet = ids;
 
-    const out = document.getElementById('out');
+    // 一頁式需同步「該段」容器，不要永遠抓 #out
+    const out = rootOut || document.getElementById('out');
     if (out) syncSelectionUi(out);
 
     return { ok: ids.size > 0, n: ids.size };
   }
 
-  async function importFromPrompt() {
+  async function importSelectionSmart(rootOut) {
+    // Prefer Clipboard API when available; if unavailable/blocked, fallback to prompt.
+    const canRead = !!(navigator.clipboard && typeof navigator.clipboard.readText === 'function');
+
+    if (canRead) {
+      try {
+        const text = await navigator.clipboard.readText();
+        if (text && String(text).trim()) {
+          const r = applyImportedSelectionFromText(String(text), rootOut);
+          toast(r.ok ? `已匯入並選取(${r.n})` : '匯入失敗');
+          return;
+        }
+        toast('剪貼簿是空的');
+        return;
+      } catch (e) {
+        // Permission denied / insecure context / other failures -> fallback to prompt.
+      }
+    }
+
     const text = window.prompt('貼上匯入文字（每行：類型 名稱）：');
     if (!text) return;
 
-    const r = applyImportedSelectionFromText(text);
-    B.showToast(r.ok ? `已匯入並選取(${r.n})` : '匯入失敗');
+    const r = applyImportedSelectionFromText(text, rootOut);
+    toast(r.ok ? `已匯入並選取(${r.n})` : '匯入失敗');
   }
 
-function exportRoundTrip() {
+
+  function exportRoundTrip() {
     const last = window.renderShopping?._last;
     if (!last) return;
 
@@ -289,16 +308,24 @@ function exportRoundTrip() {
     const payload = buildRoundTrip(last.cached, exportRows, selectedIds);
     const text = JSON.stringify(payload, null, 2);
 
-    copyTextToClipboard(text).then((ok) => {
-      B.showToast(ok ? '已複製匯出資料' : '匯出失敗');
-    });
+    (async () => {
+      let ok = false;
+      if (typeof U.copyTextToClipboardSync === 'function') ok = U.copyTextToClipboardSync(text);
+      else ok = await U.copyTextToClipboard(text);
+      toast(ok ? '已複製匯出資料' : '匯出失敗');
+    })();
   }
 
   function importRoundTripFromText(text) {
     if (!text) return false;
 
     let obj = null;
-    try { obj = JSON.parse(text); } catch { return false; }
+    try {
+      obj = JSON.parse(text);
+    } catch {
+      return false;
+    }
+
     if (!obj || !Array.isArray(obj.header) || !Array.isArray(obj.data)) return false;
 
     const next = { header: obj.header, data: obj.data, meta: obj.meta || {} };
@@ -317,17 +344,17 @@ function exportRoundTrip() {
     return true;
   }
 
-  async function importFromPrompt() {
+  async function importRoundTripFromPrompt() {
     const text = window.prompt('貼上匯入 JSON：');
     if (!text) return;
+
     const ok = importRoundTripFromText(text);
-    B.showToast(ok ? '已匯入' : '匯入失敗');
+    toast(ok ? '已匯入' : '匯入失敗');
   }
 
   async function tryAutoImportFromClipboard() {
     if (window.__SHEET_VIEW_MODE__ !== 'shopping') return;
     if (!navigator.clipboard?.readText) return;
-    if (!U || !U.parseCopyText) return;
 
     try {
       const text = await navigator.clipboard.readText();
@@ -340,13 +367,13 @@ function exportRoundTrip() {
       if (!parsed.ok) return;
 
       const r = applyImportedSelectionFromText(text);
-      if (r.ok) B.showToast(`已自動匯入並選取(${r.n})`);
+      if (r.ok) toast(`已自動匯入並選取(${r.n})`);
     } catch {
       // ignore
     }
   }
 
-function updateToolbarState(out) {
+  function updateToolbarState(out) {
     const root = out || document.getElementById('out');
     if (!root) return;
 
@@ -358,11 +385,13 @@ function updateToolbarState(out) {
 
     // 依選取數更新按鈕文字：複製(0)/複製(1)...
     copyBtn.textContent = `複製(${n})`;
-    copyBtn.disabled = (n === 0);
-    copyBtn.title = (n === 0) ? '未選取時不可複製' : '';
+
+    // 不要 disabled：讓使用者點了也能得到「未選取」提示
+    copyBtn.disabled = false;
+    copyBtn.title = (n === 0) ? '未選取項目：點選卡片可選取，再按複製' : '';
   }
 
-function ensureShoppingToolbarHtml(meta) {
+  function ensureShoppingToolbarHtml(meta) {
     return `
       <div class="copy-toolbar-right">
         <button class="sched-btn shop-copy" type="button">複製</button>
@@ -371,7 +400,7 @@ function ensureShoppingToolbarHtml(meta) {
     `;
   }
 
-function mapKeys(header) {
+  function mapKeys(header) {
     const keyDisplayMode = B.pickField(header, ['顯示模式', 'display mode', 'display_mode', 'mode']);
 
     const keyTime = header[0];
@@ -442,21 +471,35 @@ function mapKeys(header) {
     return ensureShoppingToolbarHtml(cached?.meta || {});
   }
 
-  function afterRender() {
-    const out = document.getElementById('out');
+  function afterRender(ctx) {
+    // SheetCardBase 內部 renderer._last 是掛在「實作 renderer」上，
+    // 但外層包裝後 window.renderShopping._last 可能拿不到。
+    // 這裡把 ctx（含 sorted/keys/idByIndex）同步到 window.renderShopping._last，
+    // 供 copySelected / shareSelected / import 等功能使用。
+    try {
+      if (ctx && window.renderShopping) {
+        window.renderShopping._last = {
+          cached: ctx.cached,
+          sorted: ctx.sorted,
+          keys: ctx.keys,
+          idByIndex: ctx.idByIndex,
+        };
+      }
+    } catch {
+      // ignore
+    }
+
+    const out = (ctx && ctx.out) ? ctx.out : document.getElementById('out');
     if (!out) return;
 
-    // toolbar
     const copyBtn = out.querySelector('.shop-copy');
     const importBtn = out.querySelector('.shop-import');
 
     if (copyBtn) copyBtn.onclick = () => { copySelected(); };
-    if (importBtn) importBtn.onclick = () => { importFromPrompt(); };
+    if (importBtn) importBtn.onclick = () => { importSelectionSmart(out); };
 
-// selection behaviors（點卡片背景/點空白背景清空）
+    // selection behaviors
     bindShoppingSelectionEventsOnce(out);
-
-    // render 後同步一次（避免匯入/切換後狀態不一致）
     syncSelectionUi(out);
 
     // auto import hooks
@@ -517,4 +560,9 @@ function mapKeys(header) {
 
     return _renderShoppingImpl(cached);
   };
+
+  // 額外曝露：若你要從外部觸發（目前 toolbar 未綁 share/export/json import）
+  window.renderShopping.shareSelected = shareSelected;
+  window.renderShopping.exportRoundTrip = exportRoundTrip;
+  window.renderShopping.importRoundTripFromPrompt = importRoundTripFromPrompt;
 })();

@@ -1,19 +1,76 @@
 'use strict';
 
 /**
- * utils-copy.js
- * 共用：依「類型 / 地點名稱(地點別稱)」分組 key、複製文字格式、剪貼簿、以及「從複製文字匯入並選取」。
+ * utils-copy.js（複製 / 匯入 / 分組 / 共享 UI）
  *
- * 主要給：
- * - view-grid.js：維持既有「依類型 / 依地點別稱」分組 + 複製選取項目（格式：keyType keyName）
- * - view-shopping.js：提供「複製 / 匯入」；匯入會解析複製文字並對應選中 card
+ * 目的：把「文字格式、剪貼簿、匯入比對、分組 key」抽成共用工具，避免各 view 重複實作。
+ *
+ * 主要提供：
+ * - 分組：groupKeyForItem / groupData（支援依類型或依地點別稱；含地點別稱正規化與行政區擷取）
+ * - 複製：buildCopyText（每行一筆；預設為「type + 空白 + name」）
+ * - 匯入：parseCopyText + matchPairsToIds（把複製文字轉成 pair，再對 rows 進行比對找回 itemId）
+ * - 採購分享文字：buildShoppingShareText（含標題/日期、地點/金額/備註/官網）
+ * - 剪貼簿：copyTextToClipboard（優先 Clipboard API；不支援或失敗則回落 execCommand）
+ *   - 同步版本 copyTextToClipboardSync：避免在 click handler 內 await 造成 user-activation 丟失
+ * - UI：ensureCopyStyle + showCopyToast（共用按鈕樣式與簡易 toast）
+ *
+ * 主要使用者：
+ * - view-grid.js：分組與「複製已選取」
+ * - view-shopping.js：複製/匯入/分享文字與 toast
  */
+
 
 (function () {
   const U = {};
 
   function t(v) { return (v == null) ? '' : String(v).trim(); }
   function norm(v) { return t(v).replace(/\s+/g, ' ').toLowerCase(); }
+
+function normalizeUrl(url) {
+  const s = t(url);
+  if (!s) return '';
+  const B = window.SheetCardBase;
+  if (B && typeof B.normalizeUrl === 'function') return B.normalizeUrl(s);
+  if (/^https?:\/\//i.test(s)) return s;
+  return 'https://' + s;
+}
+
+U.buildShoppingShareText = function buildShoppingShareText({ meta, keys, rows }) {
+  const title = t(meta?.['標題'] || meta?.['title'] || '採購清單');
+  const date = t(meta?.['日期'] || meta?.['date'] || '');
+  let out = `【${title}】${date ? ' ' + date : ''}\n\n`;
+
+  const keyTime = keys?.keyTime;
+  const keyType = keys?.keyType;
+  const keyName = keys?.keyName;
+  const keyLoc = keys?.keyLocation;
+  const keyAddr = keys?.keyAddress || keys?.keyLocation;
+  const keyPrice = keys?.keyPrice;
+  const keyPriceNt = keys?.keyPriceNt;
+  const keySite = keys?.keySite;
+  const keyNote = keys?.keyNote;
+
+  (rows || []).forEach((row, i) => {
+    const time = t(row?.[keyTime]);
+    const typ = t(row?.[keyType]);
+    const name = t(row?.[keyName]);
+    const loc = t(row?.[keyLoc]);
+    const addr = t(row?.[keyAddr]);
+    const note = t(row?.[keyNote]);
+    const price = t(row?.[keyPrice]);
+    const priceNt = t(row?.[keyPriceNt]);
+    const site = normalizeUrl(row?.[keySite]);
+
+    out += `${i + 1}. ${time ? `[${time}] ` : ''}${typ ? `(${typ}) ` : ''}${name}\n`;
+    if (loc || addr) out += `   地點：${loc || addr}\n`;
+    if (price || priceNt) out += `   金額：${priceNt || price}\n`;
+    if (note) out += `   備註：${note}\n`;
+    if (site) out += `   官網：${site}\n`;
+    out += `\n`;
+  });
+
+  return out.trim();
+};
 
   U.esc = function (s) {
     if (typeof window !== 'undefined' && typeof window.escapeHtml === 'function') {
@@ -224,7 +281,37 @@
   };
 
   
-  /* =========================
+  
+
+/* =========================
+ * Toast
+ * ========================= */
+
+U.showCopyToast = function (msg, ms) {
+  try { U.ensureCopyStyle(); } catch {}
+  const text = String(msg || '').trim();
+  if (!text) return;
+
+  const id = 'utils-copy-toast';
+  let el = document.getElementById(id);
+  if (!el) {
+    el = document.createElement('div');
+    el.id = id;
+    el.className = 'copy-toast';
+    document.body.appendChild(el);
+  }
+
+  el.textContent = text;
+  el.classList.add('show');
+
+  const dur = (typeof ms === 'number' && ms > 0) ? ms : 1200;
+  clearTimeout(U.showCopyToast._t);
+  U.showCopyToast._t = setTimeout(() => {
+    try { el.classList.remove('show'); } catch {}
+  }, dur);
+};
+
+/* =========================
    * Style (shared UI)
    * ========================= */
 
@@ -307,13 +394,15 @@
 /* simple toast */
 .copy-toast{
   position:fixed;
-  left:50%;
-  bottom:18px;
-  transform:translateX(-50%);
+  top:14px;
+  right:14px;
+  left:auto;
+  bottom:auto;
+  transform:none;
   background:rgba(17,24,39,.92);
   color:#fff;
   padding:10px 14px;
-  border-radius:9999px;
+  border-radius:12px;
   font-size:14px;
   font-weight:800;
   z-index:99999;

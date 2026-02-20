@@ -1,565 +1,315 @@
 // filename: js/view-grid.js
 'use strict';
 
-const U = (typeof window !== 'undefined' && window.UtilsCopy) ? window.UtilsCopy : null;
-
 /**
- * 圖片九宮格（可切換分組：依「類型」或依「地點別稱」）
- * 顯示：圖片、名稱、地點（可點複製）、營業時間、金額
+ * view-grid.js（圖片九宮格 / 分組檢視）
  *
- * 功能特性（與既有邏輯一致）：
- * - 欄位對應：官網、地點別稱、換算金額(NT)
- * - 地點顯示：地址(地點別稱)；複製仍複製「地址」
- * - 評論欄位：評論 / 評論1 / 評論2（分成不同按鈕）
- *   - 檢測網址：IG/FB/Discord -> 按鈕文字改 IG/FB/DC；其他 -> 評 / 評2 / 評3
- * - 點選圖片：放大預覽（與背景點擊分離）
+ * 這個視圖負責把「一般清單資料」渲染成九宮格卡片，並提供：
+ * - 分組切換：依「類型」(keyType) 或依「地點別稱」(keyLocationAlias)
+ * - 卡片選取：點卡片背景切換選取狀態；供「複製」使用
+ * - 複製格式：每行一筆，內容為「type + 空白 + name」（由 UtilsCopy.buildCopyText 統一產生）
  *
- * 新增：
- * - 卡片背景點擊：點一下淡淡外框選取；再點一次取消
- * - 最上方擇一按鈕：依 keyType 分組 / 依 keyLocationAlias 分組
- * - 最上方複製按鈕：將選中的項目整理成文字並複製（格式：keyType keyName）
+ * 欄位行為摘要：
+ * - 地點顯示：地址(地點別稱)；點地點會複製「地址」文字（不是別稱）
+ * - 評論欄位：支援「評論 / 評論1 / 評論2 ...」；若連結指向 IG/FB/Discord，按鈕文字改為 IG/FB/DC，其餘使用「評/評2/評3」
+ * - 圖片：點圖片只做放大預覽，不會觸發卡片選取（避免誤操作）
+ * - 金額：顯示/換算邏輯委派給 UtilsMoney（utils-money.js），此檔只負責把欄位值送進共用函式
  *
- * 本次修正：
- * - 依地點別稱分組時，只取第一個主名稱（例如「國立臺灣科學教育館 七樓...」視為「國立臺灣科學教育館」）
- *
- * 金額顯示規則（本次新增重點）：
- * - 只處理「明確非 NTD/TWD」的幣別：RMB/CNY、JPY、USD、KRW、HKD
- * - 若檢測到 NT / TWD / NTD：完全不處理（照原本字串顯示）
- * - 若沒寫幣別：完全不處理（照原本字串顯示）
- * - 若「換算金額(NT)」該行有值：優先使用該值；否則用匯率自動換算
- * - 金額欄位可為多行：逐行處理；有幣別才換算，其他行原樣保留
- *
- * 依賴：全域 escapeHtml()
+ * 依賴：
+ * - window.UtilsCopy（utils-copy.js）：分組、複製、toast 等共用功能
+ * - window.UtilsMoney（utils-money.js）：金額/幣別偵測與換算顯示
+ * - 全域 escapeHtml()
  */
 
-/* =========================
- * Utilities
- * ========================= */
+(function () {
+  const U = window.UtilsCopy;
+  const M = window.UtilsMoney;
 
-function pickField(header = [], candidates = []) {
-  const keys = header.map(h => (h || '').toString().trim());
-  const lower = keys.map(k => k.toLowerCase());
-
-  for (const c of candidates) {
-    const ci = c.toLowerCase();
-
-    let idx = lower.indexOf(ci);
-    if (idx !== -1) return keys[idx];
-
-    idx = lower.findIndex(k => k.includes(ci));
-    if (idx !== -1) return keys[idx];
+  if (!U) {
+    console.error('[view-grid] missing UtilsCopy (utils-copy.js)');
+    return;
   }
-  return null;
-}
+  if (!M || typeof M.buildPriceDisplayHtml !== 'function') {
+    console.error('[view-grid] missing UtilsMoney.buildPriceDisplayHtml (utils-money.js)');
+    return;
+  }
 
-function collectReviewKeys(header = []) {
-  const keys = header.map(h => (h || '').toString().trim()).filter(Boolean);
-
-  const out = [];
-  for (const k of keys) {
-    const kl = k.toLowerCase();
-
-    if (k === '評論' || /^評論\d+$/u.test(k)) {
-      out.push(k);
-      continue;
-    }
-    if (kl === 'review' || /^review\d+$/.test(kl) || kl === 'reviews') {
-      out.push(k);
-      continue;
-    }
-    if (kl.includes('review')) {
-      out.push(k);
-      continue;
+  // 強制依賴（缺就直接中止，以免 view 沒掛 renderer）
+  const _needFns = [
+    'copyTextToClipboard',
+    'showCopyToast',
+    'buildCopyText',
+    'hash32',
+    'groupKeyForItem',
+    'groupData',
+  ];
+  for (const fn of _needFns) {
+    if (typeof U[fn] !== 'function') {
+      console.error('[view-grid] UtilsCopy missing function:', fn);
+      return;
     }
   }
 
-  return out.filter((k, i) => out.indexOf(k) === i);
-}
+  /* =========================
+   * Utilities
+   * ========================= */
 
-function firstImageUrl(value) {
-  if (!value) return '';
-  const parts = String(value).trim().split(/[\s,;\n\r]+/).filter(Boolean);
-  const url = parts.find(p => /^https?:\/\//i.test(p));
-  return url || '';
-}
+  function pickField(header = [], candidates = []) {
+    const keys = header.map(h => (h || '').toString().trim());
+    const lower = keys.map(k => k.toLowerCase());
 
-function isHttpUrl(v) {
-  return typeof v === 'string' && /^https?:\/\//i.test(v.trim());
-}
+    for (const c of candidates) {
+      const ci = c.toLowerCase();
 
-function normalizeUrl(v) {
-  const s = String(v || '').trim();
-  if (!s) return '';
-  if (isHttpUrl(s)) return s;
+      let idx = lower.indexOf(ci);
+      if (idx !== -1) return keys[idx];
 
-  if (typeof window.makeSafeUrl === 'function') {
-    const u = window.makeSafeUrl(s);
-    return isHttpUrl(u) ? u : '';
+      idx = lower.findIndex(k => k.includes(ci));
+      if (idx !== -1) return keys[idx];
+    }
+    return null;
   }
 
-  if (/^\/\//.test(s)) return `https:${s}`;
-  if (/^[a-z0-9.-]+\.[a-z]{2,}(\/.*)?$/i.test(s)) return `https://${s}`;
-  return '';
-}
+  function collectReviewKeys(header = []) {
+    const keys = header.map(h => (h || '').toString().trim()).filter(Boolean);
 
-/**
- * 注意：依你的規則「沒寫幣別就不處理照原本顯示」，
- * 因此不再做「沒符號就自動補 $」。
- */
-function formatPrice(raw) {
-  const s = String(raw || '').trim();
-  if (!s) return '';
-  return s;
-}
+    const out = [];
+    for (const k of keys) {
+      const kl = k.toLowerCase();
 
-function detectPlatformLabel(url) {
-  const u = String(url || '').toLowerCase();
-  if (!u) return '評';
+      if (k === '評論' || /^評論\d+$/u.test(k)) {
+        out.push(k);
+        continue;
+      }
+      if (kl === 'review' || /^review\d+$/.test(kl) || kl === 'reviews') {
+        out.push(k);
+        continue;
+      }
+      if (kl.includes('review')) {
+        out.push(k);
+        continue;
+      }
+    }
 
-  if (u.includes('instagram.com') || u.includes('instagr.am') || u.includes('ig.me')) return 'IG';
-  if (u.includes('facebook.com') || u.includes('fb.com') || u.includes('fb.me')) return 'FB';
-  if (u.includes('discord.gg') || u.includes('discord.com')) return 'DC';
+    return out.filter((k, i) => out.indexOf(k) === i);
+  }
 
-  return '評';
-}
+  function firstImageUrl(value) {
+    if (!value) return '';
+    const parts = String(value).trim().split(/[\s,;\n\r]+/).filter(Boolean);
+    const url = parts.find(p => /^https?:\/\//i.test(p));
+    return url || '';
+  }
 
-function buildReviewButtons(urls) {
-  const labelCount = Object.create(null);
-  const genericCount = { n: 0 };
+  function isHttpUrl(v) {
+    return typeof v === 'string' && /^https?:\/\//i.test(v.trim());
+  }
 
-  return urls.map((x) => {
-    const base = detectPlatformLabel(x.url);
+  function normalizeUrl(v) {
+    const s = String(v || '').trim();
+    if (!s) return '';
+    if (isHttpUrl(s)) return s;
 
-    if (base === '評') {
-      genericCount.n += 1;
-      const t = (genericCount.n === 1) ? '評' : `評${genericCount.n}`;
+    if (typeof window.makeSafeUrl === 'function') {
+      const u = window.makeSafeUrl(s);
+      return isHttpUrl(u) ? u : '';
+    }
+
+    if (/^\/\//.test(s)) return `https:${s}`;
+    if (/^[a-z0-9.-]+\.[a-z]{2,}(\/.*)?$/i.test(s)) return `https://${s}`;
+    return '';
+  }
+
+  function detectPlatformLabel(url) {
+    const u = String(url || '').toLowerCase();
+    if (!u) return '評';
+
+    if (u.includes('instagram.com') || u.includes('instagr.am') || u.includes('ig.me')) return 'IG';
+    if (u.includes('facebook.com') || u.includes('fb.com') || u.includes('fb.me')) return 'FB';
+    if (u.includes('discord.gg') || u.includes('discord.com')) return 'DC';
+
+    return '評';
+  }
+
+  function buildReviewButtons(urls) {
+    const labelCount = Object.create(null);
+    const genericCount = { n: 0 };
+
+    return urls.map((x) => {
+      const base = detectPlatformLabel(x.url);
+
+      if (base === '評') {
+        genericCount.n += 1;
+        const t = (genericCount.n === 1) ? '評' : `評${genericCount.n}`;
+        return { text: t, url: x.url };
+      }
+
+      labelCount[base] = (labelCount[base] || 0) + 1;
+      const n = labelCount[base];
+      const t = (n === 1) ? base : `${base}${n}`;
       return { text: t, url: x.url };
+    });
+  }
+
+  /* =========================
+   * Money / FX (shared)
+   * ========================= */
+
+  function buildPriceDisplayHtml(priceRaw, priceNtRaw) {
+    // 直接調用共用工具（不做兼容 fallback）
+    return M.buildPriceDisplayHtml(priceRaw, priceNtRaw, escapeHtml);
+  }
+
+  /* =========================
+   * Selection / Group
+   * ========================= */
+
+  /** 穩定 32-bit hash（用於選取狀態持久化） */
+  function hash32(str) {
+    return U.hash32(str);
+  }
+
+  function groupData(data, fieldKeys, groupMode) {
+    return U.groupData(data, fieldKeys, groupMode);
+  }
+
+  function buildSelectedText(selectedIds, idMap) {
+    if (!selectedIds || !selectedIds.size) return '';
+
+    const items = [];
+    for (const id of selectedIds) {
+      const it = idMap.get(id);
+      if (!it) continue;
+      items.push({ type: String(it.type || '').trim(), name: String(it.name || '').trim() });
     }
 
-    labelCount[base] = (labelCount[base] || 0) + 1;
-    const n = labelCount[base];
-    const t = (n === 1) ? base : `${base}${n}`;
-    return { text: t, url: x.url };
-  });
-}
-
-/** 從地址中抓出「XX區」 */
-function extractDistrict(addr = '') {
-  if (U && typeof U.extractDistrict === 'function') return U.extractDistrict(addr);
-  const s = String(addr || '').trim();
-  if (!s) return null;
-
-  const common = /(西屯區|南屯區|北屯區|北區|中區|西區|南區|東區|大里區|太平區|潭子區|烏日區|大雅區|龍井區|清水區|沙鹿區|后里區|外埔區|大肚區|霧峰區|神岡區|梧棲區|石岡區|新社區)/;
-  let m = s.match(common);
-  if (m) return m[1];
-
-  const all = s.match(/([\u4e00-\u9fa5]{1,3}區)/g);
-  if (all && all.length) return all[all.length - 1];
-
-  return null;
-}
-
-/**
- * 地點別稱分組用：只取「第一個主名稱」
- * - 先取第一行（避免儲存格內有換行多筆）
- * - 再切常見分隔符（、 , ; / |）
- * - 若包含中文且有空白：取空白前（例：國立臺灣科學教育館 七樓... -> 國立臺灣科學教育館）
- */
-function normalizeAliasForGroup(alias = '') {
-  if (U && typeof U.normalizeAliasForGroup === 'function') return U.normalizeAliasForGroup(alias);
-
-  let s = String(alias || '').trim();
-  if (!s) return '';
-
-  const lines = s.split(/\r?\n/).map(x => x.trim()).filter(Boolean);
-  s = lines.length ? lines[0] : s;
-
-  const segs = s.split(/[、,;\/|]+/).map(x => x.trim()).filter(Boolean);
-  s = segs.length ? segs[0] : s;
-
-  const hasCjk = /[\u4e00-\u9fff]/.test(s);
-  if (hasCjk) {
-    const i = s.indexOf(' ');
-    if (i > 0) s = s.slice(0, i).trim();
+    return U.buildCopyText(items);
   }
 
-  return s;
-}
+  function updateCopyButtonUI(root) {
+    const btn = root.querySelector('#grid-copy-selected');
+    if (!btn) return;
 
-/* =========================
- * Money / FX
- * ========================= */
+    const n = (renderGrid._selectedIds && renderGrid._selectedIds.size) ? renderGrid._selectedIds.size : 0;
+    btn.disabled = (n === 0);
 
-function getExchangeRatesToNt() {
-  const base = {
-    USD: 31.5,
-    JPY: 0.21,
-    CNY: 4.4,
-    KRW: 0.024,
-    HKD: 4.0,
-    NTD: 1.0,
-  };
-
-  const src = (typeof window !== 'undefined')
-    ? (window.SCHEDULE_EXCHANGE_RATES || window.EXCHANGE_RATES)
-    : null;
-
-  if (!src || typeof src !== 'object') return base;
-
-  const out = { ...base };
-  Object.keys(base).forEach((k) => {
-    const v = Number(src[k]);
-    if (Number.isFinite(v) && v > 0) out[k] = v;
-  });
-  return out;
-}
-
-function parseNumberLoose(v) {
-  const s = String(v || '').trim();
-  if (!s) return NaN;
-  const m = s.replace(/,/g, '').match(/-?\d+(?:\.\d+)?/);
-  return m ? Number(m[0]) : NaN;
-}
-
-function detectCurrencyCode(raw) {
-  const s = String(raw || '').trim();
-  const sl = s.toLowerCase();
-  if (!s) return '';
-
-  // 你的規則：只要偵測到 NT/TWD/NTD，就「完全不處理」
-  if (/\b(ntd|twd)\b/.test(sl) || /\bnt\s*\$?\b/i.test(s) || sl.includes('台幣') || sl.includes('新台幣')) return 'NTD';
-
-  if (sl.includes('hkd') || sl.includes('hk$') || sl.includes('港幣') || sl.includes('港元')) return 'HKD';
-  if (sl.includes('krw') || s.includes('₩') || sl.includes('韓幣') || sl.includes('韓元')) return 'KRW';
-  if (sl.includes('rmb') || sl.includes('cny') || sl.includes('人民幣')) return 'CNY';
-  if (sl.includes('usd') || sl.includes('us$') || sl.includes('美金') || sl.includes('美元')) return 'USD';
-  if (sl.includes('jpy') || s.includes('円') || sl.includes('日幣') || sl.includes('日圓') || sl.includes('日元')) return 'JPY';
-
-  if (s.includes('¥') || s.includes('￥')) {
-    if (sl.includes('rmb') || sl.includes('cny')) return 'CNY';
-    return 'JPY';
+    const label = (n === 0) ? '複製' : `複製(${n})`;
+    btn.textContent = label;
   }
 
-  // 若你不希望 "$123" 被推定 USD，可移除此條
-  if (/^\s*\$/.test(s)) return 'USD';
+  /* =========================
+   * Image Modal (singleton)
+   * ========================= */
 
-  return '';
-}
+  function ensureImageModalOnce() {
+    if (document.getElementById('img-modal')) return;
 
-function formatNtdAmount(n) {
-  if (!Number.isFinite(n)) return '';
-  const v = Math.round(n);
-  return `NT$${v.toLocaleString('en-US')}`;
-}
-
-function extractTrailingUnitSuffix(line) {
-  // 抓像：/人、/  人、/1人、/ 1 人、／人、／1人（僅抓「行尾」）
-  const s = String(line || '');
-  const m = s.match(/((?:\/|／)\s*(?:\d+\s*)?人)\s*$/u);
-  if (!m) return { base: s, suffix: '' };
-  const suffix = m[1].replace(/\s+$/u, '');
-  const base = s.slice(0, m.index).trimEnd();
-  return { base, suffix };
-}
-
-function splitMoneyLines(raw) {
-  const s = String(raw || '').trim();
-  if (!s) return [];
-  return s
-    .split(/\r?\n|；|;|、/u)
-    .map(x => String(x).trim())
-    .filter(Boolean);
-}
-
-function buildPriceDisplaySingleLine(priceRawLine, priceNtRawLine) {
-  const line = String(priceRawLine || '').trim();
-  if (!line) return '';
-
-  const currency = detectCurrencyCode(line);
-
-  // 規則：NT / TWD / NTD 或 沒寫幣別 → 不處理，原樣顯示
-  if (currency === 'NTD' || currency === '') {
-    return line;
-  }
-
-  const amount = parseNumberLoose(line);
-  if (!Number.isFinite(amount)) {
-    return line;
-  }
-
-  // 優先吃「換算金額(NT)」的該行（若有），否則用匯率
-  const preferredNt = parseNumberLoose(priceNtRawLine);
-  let nt = Number.isFinite(preferredNt) ? preferredNt : NaN;
-
-  if (!Number.isFinite(nt)) {
-    const rates = getExchangeRatesToNt();
-    const r = rates[currency];
-    if (Number.isFinite(r) && r > 0) nt = amount * r;
-  }
-
-  const ntText = formatNtdAmount(nt);
-  if (!ntText) return line;
-
-  const { base, suffix } = extractTrailingUnitSuffix(line);
-
-  // 例：RMB$ 3401/人 -> RMB$ 3401/人(約NT$14,964/人)
-  if (suffix) {
-    return `${base}${suffix}(約${ntText}${suffix})`;
-  }
-  return `${line}(約${ntText})`;
-}
-
-function buildPriceDisplayHtml(priceRaw, priceNtRaw) {
-  const rawLines = splitMoneyLines(priceRaw);
-  if (!rawLines.length) return '';
-
-  const ntLines = splitMoneyLines(priceNtRaw);
-  const hasNtLines = ntLines.length > 0;
-
-  const lines = rawLines.map((line, idx) => {
-    const ntLine = hasNtLines ? (ntLines[idx] || ntLines[0] || '') : '';
-    return buildPriceDisplaySingleLine(line, ntLine);
-  });
-
-  // 這裡會 escape，並用 <br> 保留換行
-  return lines.map(x => escapeHtml(String(x))).join('<br>');
-}
-
-/* =========================
- * Selection / Group
- * ========================= */
-
-/** 穩定 32-bit hash（用於選取狀態持久化） */
-function hash32(str) {
-  if (U && typeof U.hash32 === 'function') return U.hash32(str);
-
-  const s = String(str || '');
-  let h = 5381;
-  for (let i = 0; i < s.length; i++) {
-    h = ((h << 5) + h) + s.charCodeAt(i);
-    h |= 0;
-  }
-  return (h >>> 0).toString(16);
-}
-
-/** 依目前 groupMode 決定分組 key */
-function groupKeyForItem(item, fieldKeys, groupMode) {
-  if (U && typeof U.groupKeyForItem === 'function') return U.groupKeyForItem(item, fieldKeys, groupMode);
-
-  const type = fieldKeys.type ? String(item[fieldKeys.type] || '').trim() : '';
-  const loc = fieldKeys.location ? String(item[fieldKeys.location] || '').trim() : '';
-  const aliasRaw = fieldKeys.locationAlias ? String(item[fieldKeys.locationAlias] || '').trim() : '';
-  const alias = normalizeAliasForGroup(aliasRaw);
-  const district = extractDistrict(loc) || '';
-
-  if (groupMode === 'locationAlias') {
-    return alias || district || type || '未分類';
-  }
-  return type || district || alias || '未分類';
-}
-
-function groupData(data, fieldKeys, groupMode) {
-  if (U && typeof U.groupData === 'function') return U.groupData(data, fieldKeys, groupMode);
-
-  const map = new Map();
-  data.forEach(it => {
-    const g = groupKeyForItem(it, fieldKeys, groupMode);
-    if (!map.has(g)) map.set(g, []);
-    map.get(g).push(it);
-  });
-  return map;
-}
-
-async function copyTextToClipboard(text) {
-  if (U && typeof U.copyTextToClipboard === 'function') return U.copyTextToClipboard(text);
-
-  const s = String(text || '');
-  if (!s) return false;
-
-  try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(s);
-      return true;
-    }
-  } catch {
-    // fallback below
-  }
-
-  try {
-    const ta = document.createElement('textarea');
-    ta.value = s;
-    ta.style.position = 'fixed';
-    ta.style.left = '-9999px';
-    ta.style.top = '0';
-    document.body.appendChild(ta);
-    ta.focus();
-    ta.select();
-    const ok = document.execCommand('copy');
-    document.body.removeChild(ta);
-    return !!ok;
-  } catch {
-    return false;
-  }
-}
-
-function buildSelectedText(selectedIds, idMap) {
-  if (!selectedIds || !selectedIds.size) return '';
-
-  const items = [];
-  for (const id of selectedIds) {
-    const it = idMap.get(id);
-    if (!it) continue;
-    items.push({ type: String(it.type || '').trim(), name: String(it.name || '').trim() });
-  }
-
-  if (U && typeof U.buildCopyText === 'function') return U.buildCopyText(items);
-  return items.map(x => [x.type, x.name].filter(Boolean).join(' ').trim()).filter(Boolean).join('\n');
-}
-
-function updateCopyButtonUI(root) {
-  const btn = root.querySelector('#grid-copy-selected');
-  if (!btn) return;
-
-  const n = (renderGrid._selectedIds && renderGrid._selectedIds.size) ? renderGrid._selectedIds.size : 0;
-  btn.disabled = (n === 0);
-
-  const label = (n === 0) ? '複製' : `複製(${n})`;
-  btn.textContent = label;
-}
-
-/* =========================
- * Image Modal (singleton)
- * ========================= */
-
-function ensureImageModalOnce() {
-  if (document.getElementById('img-modal')) return;
-
-  const modal = document.createElement('div');
-  modal.id = 'img-modal';
-  modal.className = 'img-modal';
-  modal.innerHTML = `
+    const modal = document.createElement('div');
+    modal.id = 'img-modal';
+    modal.className = 'img-modal';
+    modal.innerHTML = `
     <div class="img-modal-backdrop" data-close="1"></div>
     <div class="img-modal-panel" role="dialog" aria-modal="true">
       <button class="img-modal-close" type="button" aria-label="Close" data-close="1">×</button>
       <img class="img-modal-img" alt="" />
     </div>
   `;
-  document.body.appendChild(modal);
+    document.body.appendChild(modal);
 
-  modal.addEventListener('click', (e) => {
-    const close = e.target && e.target.getAttribute && e.target.getAttribute('data-close');
-    if (close) hideImageModal();
-  });
+    modal.addEventListener('click', (e) => {
+      const close = e.target && e.target.getAttribute && e.target.getAttribute('data-close');
+      if (close) hideImageModal();
+    });
 
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') hideImageModal();
-  });
-}
-
-function showImageModal(src, altText) {
-  ensureImageModalOnce();
-  const modal = document.getElementById('img-modal');
-  const img = modal.querySelector('.img-modal-img');
-  img.src = src || '';
-  img.alt = altText || '';
-  modal.classList.add('show');
-  document.documentElement.classList.add('no-scroll');
-}
-
-function hideImageModal() {
-  const modal = document.getElementById('img-modal');
-  if (!modal) return;
-
-  const img = modal.querySelector('.img-modal-img');
-  if (img) img.src = '';
-
-  modal.classList.remove('show');
-  document.documentElement.classList.remove('no-scroll');
-}
-
-/* =========================
- * Toast
- * ========================= */
-
-function showCopyToast(msg) {
-  let t = document.getElementById('copy-toast');
-  if (!t) {
-    t = document.createElement('div');
-    t.id = 'copy-toast';
-    t.className = 'copy-toast';
-    document.body.appendChild(t);
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') hideImageModal();
+    });
   }
 
-  t.textContent = msg || '已複製';
-  t.classList.add('show');
-
-  clearTimeout(showCopyToast._timer);
-  showCopyToast._timer = setTimeout(() => t.classList.remove('show'), 1200);
-}
-
-/* =========================
- * Main Render
- * ========================= */
-
-function renderGrid(cached, opts = {}) {
-  const out = document.getElementById('out');
-  if (!out) return;
-  out.innerHTML = '';
-
-  renderGrid._lastCached = cached;
-
-  const prevMode = renderGrid._groupMode || 'type';
-  const groupMode = (opts && opts.groupMode) ? String(opts.groupMode) : prevMode;
-  renderGrid._groupMode = (groupMode === 'locationAlias') ? 'locationAlias' : 'type';
-
-  if (!renderGrid._selectedIds) renderGrid._selectedIds = new Set();
-
-  const header = Array.isArray(cached?.header) ? cached.header : [];
-  const data = Array.isArray(cached?.data) ? cached.data : [];
-  if (!header.length || !data.length) {
-    out.innerHTML = '<div class="no-data">沒有可顯示的資料</div>';
-    return;
+  function showImageModal(src, altText) {
+    ensureImageModalOnce();
+    const modal = document.getElementById('img-modal');
+    const img = modal.querySelector('.img-modal-img');
+    img.src = src || '';
+    img.alt = altText || '';
+    modal.classList.add('show');
+    document.documentElement.classList.add('no-scroll');
   }
 
-  // 欄位探測
-  const keyType = pickField(header, ['類型', 'type', '分類', 'category']) || header[0];
-  const keyImage = pickField(header, ['圖片', '圖片網址', '照片', 'image', 'img', 'thumbnail', 'photo', 'pic', '圖']);
-  const keyName = pickField(header, ['名稱', 'name', 'title', '主題']) || header[0];
+  function hideImageModal() {
+    const modal = document.getElementById('img-modal');
+    if (!modal) return;
 
-  const keySite = pickField(header, ['官網', '網站', '官方網站', 'website', 'official', 'url']);
-  const keyReviews = collectReviewKeys(header);
+    const img = modal.querySelector('.img-modal-img');
+    if (img) img.src = '';
 
-  const keyLocation = pickField(header, ['地址', 'address']);
-  const keyLocationAlias = pickField(header, ['地點別稱', '地點', 'location', '別稱', 'alias', 'location alias']);
+    modal.classList.remove('show');
+    document.documentElement.classList.remove('no-scroll');
+  }
 
-  const keyHours = pickField(header, ['營業時間', '營業時段', 'hours', 'opening hours', 'open hours']);
-  const keyPrice = pickField(header, ['金額', 'price', '費用', '價錢', '價格']);
-  const keyPriceNt = pickField(header, [
-    '換算金額(NT)', '換算金額', '換算金額nt', '換算金額(nt)',
-    '換算金額twd', 'twd', 'ntd', 'converted', 'converted nt', 'converted ntd',
-  ]);
+  /* =========================
+   * Main Render
+   * ========================= */
 
-  const fieldKeys = {
-    type: keyType,
-    image: keyImage,
-    name: keyName,
-    hours: keyHours,
-    price: keyPrice,
-    priceNt: keyPriceNt,
-    location: keyLocation,
-    locationAlias: keyLocationAlias,
-    site: keySite,
-  };
+  function renderGrid(cached, opts = {}) {
+    const out = document.getElementById('out');
+    if (!out) return;
+    out.innerHTML = '';
 
-  const grouped = groupData(data, fieldKeys, renderGrid._groupMode);
+    renderGrid._lastCached = cached;
 
-  // 建立 id -> {type, name}，給「複製」用
-  renderGrid._idMap = new Map();
+    const prevMode = renderGrid._groupMode || 'type';
+    const groupMode = (opts && opts.groupMode) ? String(opts.groupMode) : prevMode;
+    renderGrid._groupMode = (groupMode === 'locationAlias') ? 'locationAlias' : 'type';
 
-  let html = '';
+    if (!renderGrid._selectedIds) renderGrid._selectedIds = new Set();
 
-  /* ====== Controls (top) ====== */
-  html += `
+    const header = Array.isArray(cached?.header) ? cached.header : [];
+    const data = Array.isArray(cached?.data) ? cached.data : [];
+    if (!header.length || !data.length) {
+      out.innerHTML = '<div class="no-data">沒有可顯示的資料</div>';
+      return;
+    }
+
+    // 欄位探測
+    const keyType = pickField(header, ['類型', 'type', '分類', 'category']) || header[0];
+    const keyImage = pickField(header, ['圖片', '圖片網址', '照片', 'image', 'img', 'thumbnail', 'photo', 'pic', '圖']);
+    const keyName = pickField(header, ['名稱', 'name', 'title', '主題']) || header[0];
+
+    const keySite = pickField(header, ['官網', '網站', '官方網站', 'website', 'official', 'url']);
+    const keyReviews = collectReviewKeys(header);
+
+    const keyLocation = pickField(header, ['地址', 'address']);
+    const keyLocationAlias = pickField(header, ['地點別稱', '地點', 'location', '別稱', 'alias', 'location alias']);
+
+    const keyHours = pickField(header, ['營業時間', '營業時段', 'hours', 'opening hours', 'open hours']);
+    const keyPrice = pickField(header, ['金額', 'price', '費用', '價錢', '價格']);
+    const keyPriceNt = pickField(header, [
+      '換算金額(NT)', '換算金額', '換算金額nt', '換算金額(nt)',
+      '換算金額twd', 'twd', 'ntd', 'converted', 'converted nt', 'converted ntd',
+    ]);
+
+    const fieldKeys = {
+      type: keyType,
+      image: keyImage,
+      name: keyName,
+      hours: keyHours,
+      price: keyPrice,
+      priceNt: keyPriceNt,
+      location: keyLocation,
+      locationAlias: keyLocationAlias,
+      site: keySite,
+    };
+
+    const grouped = groupData(data, fieldKeys, renderGrid._groupMode);
+
+    // 建立 id -> {type, name}，給「複製」用
+    renderGrid._idMap = new Map();
+
+    let html = '';
+
+    /* ====== Controls (top) ====== */
+    html += `
     <div class="grid-controls" role="group" aria-label="分組方式與複製">
       <div class="grid-controls-left" role="group" aria-label="分組方式">
         <label class="grid-radio">
@@ -578,209 +328,209 @@ function renderGrid(cached, opts = {}) {
     </div>
   `;
 
-  grouped.forEach((items, groupName) => {
-    html += `<div class="group">`;
-    html += `<h3>${escapeHtml(groupName)}</h3>`;
-    html += `<div class="grid">`;
+    grouped.forEach((items, groupName) => {
+      html += `<div class="group">`;
+      html += `<h3>${escapeHtml(groupName)}</h3>`;
+      html += `<div class="grid">`;
 
-    items.forEach(item => {
-      const name = (item[keyName] || '').toString().trim() || '(無名稱)';
-      const typeText = (item[keyType] || '').toString().trim();
+      items.forEach(item => {
+        const name = (item[keyName] || '').toString().trim() || '(無名稱)';
+        const typeText = (item[keyType] || '').toString().trim();
 
-      const imgUrl = keyImage ? firstImageUrl(item[keyImage]) : '';
+        const imgUrl = keyImage ? firstImageUrl(item[keyImage]) : '';
 
-      const siteUrl = normalizeUrl(keySite ? item[keySite] : '');
+        const siteUrl = normalizeUrl(keySite ? item[keySite] : '');
 
-      const reviewUrlObjs = [];
-      if (keyReviews && keyReviews.length) {
-        keyReviews.forEach((k, idx) => {
-          const u = normalizeUrl(item[k]);
-          if (u) reviewUrlObjs.push({ url: u, key: k, idx });
-        });
-      }
+        const reviewUrlObjs = [];
+        if (keyReviews && keyReviews.length) {
+          keyReviews.forEach((k, idx) => {
+            const u = normalizeUrl(item[k]);
+            if (u) reviewUrlObjs.push({ url: u, key: k, idx });
+          });
+        }
 
-      const reviewButtons = buildReviewButtons(reviewUrlObjs);
-      const firstReviewUrl = (reviewUrlObjs[0] && reviewUrlObjs[0].url) ? reviewUrlObjs[0].url : '';
+        const reviewButtons = buildReviewButtons(reviewUrlObjs);
+        const firstReviewUrl = (reviewUrlObjs[0] && reviewUrlObjs[0].url) ? reviewUrlObjs[0].url : '';
 
-      const hours = keyHours ? String(item[keyHours] || '').trim() : '';
-      const priceRaw = keyPrice ? String(item[keyPrice] || '').trim() : '';
-      const priceNtRaw = keyPriceNt ? String(item[keyPriceNt] || '').trim() : '';
-      const priceHtml = buildPriceDisplayHtml(priceRaw, priceNtRaw);
+        const hours = keyHours ? String(item[keyHours] || '').trim() : '';
+        const priceRaw = keyPrice ? String(item[keyPrice] || '').trim() : '';
+        const priceNtRaw = keyPriceNt ? String(item[keyPriceNt] || '').trim() : '';
+        const priceHtml = buildPriceDisplayHtml(priceRaw, priceNtRaw);
 
-      const loc = keyLocation ? String(item[keyLocation] || '').trim() : '';
-      const alias = keyLocationAlias ? String(item[keyLocationAlias] || '').trim() : '';
-      const locDisplay = loc ? (alias ? `${loc}(${alias})` : loc) : '';
+        const loc = keyLocation ? String(item[keyLocation] || '').trim() : '';
+        const alias = keyLocationAlias ? String(item[keyLocationAlias] || '').trim() : '';
+        const locDisplay = loc ? (alias ? `${loc}(${alias})` : loc) : '';
 
-      // 選取 id（跨重繪保留）
-      const stableKey = [typeText, name, loc, alias, siteUrl, firstReviewUrl, imgUrl].join('|');
-      const itemId = hash32(stableKey);
-      const isSelected = renderGrid._selectedIds.has(itemId);
+        // 選取 id（跨重繪保留）
+        const stableKey = [typeText, name, loc, alias, siteUrl, firstReviewUrl, imgUrl].join('|');
+        const itemId = hash32(stableKey);
+        const isSelected = renderGrid._selectedIds.has(itemId);
 
-      // id map（複製用）
-      renderGrid._idMap.set(itemId, { type: typeText, name });
+        // id map（複製用）
+        renderGrid._idMap.set(itemId, { type: typeText, name });
 
-      html += `<div class="grid-item ${isSelected ? 'is-selected' : ''}" data-itemid="${escapeHtml(itemId)}">`;
+        html += `<div class="grid-item ${isSelected ? 'is-selected' : ''}" data-itemid="${escapeHtml(itemId)}">`;
 
-      // 圖片
-      html += `  <div class="grid-img ${imgUrl ? '' : 'img-empty'}">`;
-      if (imgUrl) {
-        html += `    <img class="grid-img-el" src="${escapeHtml(imgUrl)}" data-full="${escapeHtml(imgUrl)}" alt="${escapeHtml(name)}" loading="lazy" draggable="false" title="點圖片放大" onerror="this.onerror=null;this.src='';this.closest('.grid-img').classList.add('img-error');">`;
-      } else {
-        html += `    <div class="img-placeholder">無圖</div>`;
-      }
-      html += `  </div>`;
+        // 圖片
+        html += `  <div class="grid-img ${imgUrl ? '' : 'img-empty'}">`;
+        if (imgUrl) {
+          html += `    <img class="grid-img-el" src="${escapeHtml(imgUrl)}" data-full="${escapeHtml(imgUrl)}" alt="${escapeHtml(name)}" loading="lazy" draggable="false" title="點圖片放大" onerror="this.onerror=null;this.src='';this.closest('.grid-img').classList.add('img-error');">`;
+        } else {
+          html += `    <div class="img-placeholder">無圖</div>`;
+        }
+        html += `  </div>`;
 
-      // 名稱
-      html += `  <div class="grid-caption" title="${escapeHtml(name)}">${escapeHtml(name)}</div>`;
+        // 名稱
+        html += `  <div class="grid-caption" title="${escapeHtml(name)}">${escapeHtml(name)}</div>`;
 
-      // 地點 / 營業時間 / 金額
-      if (locDisplay || hours || priceRaw) {
-        html += `  <div class="grid-meta">`;
-        if (locDisplay) {
-          html += `    <div class="meta-line meta-location" title="地點">
+        // 地點 / 營業時間 / 金額
+        if (locDisplay || hours || priceRaw) {
+          html += `  <div class="grid-meta">`;
+          if (locDisplay) {
+            html += `    <div class="meta-line meta-location" title="地點">
                         <span class="copy-addr" data-copy="${escapeHtml(loc)}" title="點一下複製地點">
                           ${escapeHtml(locDisplay)}
                         </span>
                       </div>`;
+          }
+          html += `    <div class="meta-line meta-row">`;
+          if (hours) html += `      <span class="meta-hours" title="營業時間">${escapeHtml(hours)}</span>`;
+          if (priceHtml) html += `      <span class="meta-price"><strong>${priceHtml}</strong></span>`;
+          html += `    </div>`;
+          html += `  </div>`;
         }
-        html += `    <div class="meta-line meta-row">`;
-        if (hours) html += `      <span class="meta-hours" title="營業時間">${escapeHtml(hours)}</span>`;
-        if (priceHtml) html += `      <span class="meta-price"><strong>${priceHtml}</strong></span>`;
-        html += `    </div>`;
-        html += `  </div>`;
-      }
 
-      // 按鈕列：最下方
-      if (siteUrl || reviewButtons.length) {
-        html += `  <div class="grid-actions">`;
-        if (siteUrl) {
-          html += `    <a class="grid-btn" href="${escapeHtml(siteUrl)}" target="_blank" rel="noopener" title="官網" aria-label="官網">官</a>`;
+        // 按鈕列：最下方
+        if (siteUrl || reviewButtons.length) {
+          html += `  <div class="grid-actions">`;
+          if (siteUrl) {
+            html += `    <a class="grid-btn" href="${escapeHtml(siteUrl)}" target="_blank" rel="noopener" title="官網" aria-label="官網">官</a>`;
+          }
+          if (reviewButtons.length) {
+            reviewButtons.forEach((b) => {
+              html += `    <a class="grid-btn" href="${escapeHtml(b.url)}" target="_blank" rel="noopener" title="評論" aria-label="評論">${escapeHtml(b.text)}</a>`;
+            });
+          }
+          html += `  </div>`;
         }
-        if (reviewButtons.length) {
-          reviewButtons.forEach((b) => {
-            html += `    <a class="grid-btn" href="${escapeHtml(b.url)}" target="_blank" rel="noopener" title="評論" aria-label="評論">${escapeHtml(b.text)}</a>`;
-          });
-        }
-        html += `  </div>`;
-      }
 
-      html += `</div>`;
+        html += `</div>`;
+      });
+
+      html += `</div></div>`;
     });
 
-    html += `</div></div>`;
-  });
+    out.insertAdjacentHTML('beforeend', html);
 
-  out.insertAdjacentHTML('beforeend', html);
+    // 初始化複製按鈕狀態
+    updateCopyButtonUI(out);
 
-  // 初始化複製按鈕狀態
-  updateCopyButtonUI(out);
+    /* =========================
+     * Event Delegation (bind once)
+     * ========================= */
+    if (!out._bindGridEvents) {
+      out._bindGridEvents = true;
 
-  /* =========================
-   * Event Delegation (bind once)
-   * ========================= */
-  if (!out._bindGridEvents) {
-    out._bindGridEvents = true;
+      // 0) 切換分組（radio）
+      out.addEventListener('change', (e) => {
+        const r = e.target && e.target.closest && e.target.closest('input[name="grid-group"]');
+        if (!r) return;
 
-    // 0) 切換分組（radio）
-    out.addEventListener('change', (e) => {
-      const r = e.target && e.target.closest && e.target.closest('input[name="grid-group"]');
-      if (!r) return;
+        const v = (r.value || '').trim();
+        const nextMode = (v === 'locationAlias') ? 'locationAlias' : 'type';
+        if (nextMode === renderGrid._groupMode) return;
 
-      const v = (r.value || '').trim();
-      const nextMode = (v === 'locationAlias') ? 'locationAlias' : 'type';
-      if (nextMode === renderGrid._groupMode) return;
+        renderGrid(renderGrid._lastCached, { groupMode: nextMode });
+      });
 
-      renderGrid(renderGrid._lastCached, { groupMode: nextMode });
-    });
+      // 0.5) 點「複製」：將選取的整理成文字（keyType keyName）複製到剪貼簿
+      out.addEventListener('click', async (e) => {
+        const btn = e.target && e.target.closest && e.target.closest('#grid-copy-selected');
+        if (!btn) return;
 
-    // 0.5) 點「複製」：將選取的整理成文字（keyType keyName）複製到剪貼簿
-    out.addEventListener('click', async (e) => {
-      const btn = e.target && e.target.closest && e.target.closest('#grid-copy-selected');
-      if (!btn) return;
+        e.preventDefault();
+        e.stopPropagation();
 
-      e.preventDefault();
-      e.stopPropagation();
+        const text = buildSelectedText(renderGrid._selectedIds, renderGrid._idMap || new Map());
+        if (!text) {
+          U.showCopyToast('沒有選取項目');
+          updateCopyButtonUI(out);
+          return;
+        }
 
-      const text = buildSelectedText(renderGrid._selectedIds, renderGrid._idMap || new Map());
-      if (!text) {
-        showCopyToast('沒有選取項目');
+        const ok = await U.copyTextToClipboard(text);
+        U.showCopyToast(ok ? '已複製' : '複製失敗');
         updateCopyButtonUI(out);
-        return;
-      }
+      });
 
-      const ok = await copyTextToClipboard(text);
-      showCopyToast(ok ? '已複製' : '複製失敗');
-      updateCopyButtonUI(out);
-    });
+      // 1) 點地點 → 複製（阻止卡片背景點擊）
+      out.addEventListener('click', async (e) => {
+        const el = e.target.closest('.copy-addr');
+        if (!el) return;
 
-    // 1) 點地點 → 複製（阻止卡片背景點擊）
-    out.addEventListener('click', async (e) => {
-      const el = e.target.closest('.copy-addr');
-      if (!el) return;
+        e.preventDefault();
+        e.stopPropagation();
 
-      e.preventDefault();
-      e.stopPropagation();
+        const text = (el.dataset.copy || el.textContent || '').trim();
+        if (!text) return;
 
-      const text = (el.dataset.copy || el.textContent || '').trim();
-      if (!text) return;
+        const ok = await U.copyTextToClipboard(text);
+        U.showCopyToast(ok ? '已複製地點' : '複製失敗');
+      }, true);
 
-      const ok = await copyTextToClipboard(text);
-      showCopyToast(ok ? '已複製地點' : '複製失敗');
-    }, true);
+      // 2) 點圖片 → 放大（不觸發背景）
+      out.addEventListener('click', (e) => {
+        const img = e.target.closest('.grid-img-el');
+        if (!img) return;
 
-    // 2) 點圖片 → 放大（不觸發背景）
-    out.addEventListener('click', (e) => {
-      const img = e.target.closest('.grid-img-el');
-      if (!img) return;
+        e.preventDefault();
+        e.stopPropagation();
 
-      e.preventDefault();
-      e.stopPropagation();
+        const src = img.getAttribute('data-full') || img.getAttribute('src') || '';
+        if (!src) return;
+        showImageModal(src, img.getAttribute('alt') || '');
+      });
 
-      const src = img.getAttribute('data-full') || img.getAttribute('src') || '';
-      if (!src) return;
-      showImageModal(src, img.getAttribute('alt') || '');
-    });
+      // 3) 點按鈕列（a）→ 正常開，但不觸發背景
+      out.addEventListener('click', (e) => {
+        const btn = e.target.closest('.grid-btn');
+        if (!btn) return;
+        e.stopPropagation();
+      });
 
-    // 3) 點按鈕列（a）→ 正常開，但不觸發背景
-    out.addEventListener('click', (e) => {
-      const btn = e.target.closest('.grid-btn');
-      if (!btn) return;
-      e.stopPropagation();
-    });
+      // 4) 點卡片背景 → 選取/取消（淡外框）
+      out.addEventListener('click', (e) => {
+        const card = e.target.closest('.grid-item');
+        if (!card) return;
 
-    // 4) 點卡片背景 → 選取/取消（淡外框）
-    out.addEventListener('click', (e) => {
-      const card = e.target.closest('.grid-item');
-      if (!card) return;
+        const interactiveSel = '.grid-img-el, .grid-btn, .copy-addr, a, button, input, textarea, select, label';
+        if (e.target.closest(interactiveSel)) return;
 
-      const interactiveSel = '.grid-img-el, .grid-btn, .copy-addr, a, button, input, textarea, select, label';
-      if (e.target.closest(interactiveSel)) return;
+        const id = (card.getAttribute('data-itemid') || '').trim();
+        if (!id) return;
 
-      const id = (card.getAttribute('data-itemid') || '').trim();
-      if (!id) return;
+        const set = renderGrid._selectedIds || (renderGrid._selectedIds = new Set());
 
-      const set = renderGrid._selectedIds || (renderGrid._selectedIds = new Set());
+        if (card.classList.contains('is-selected')) {
+          card.classList.remove('is-selected');
+          set.delete(id);
+        } else {
+          card.classList.add('is-selected');
+          set.add(id);
+        }
 
-      if (card.classList.contains('is-selected')) {
-        card.classList.remove('is-selected');
-        set.delete(id);
-      } else {
-        card.classList.add('is-selected');
-        set.add(id);
-      }
+        updateCopyButtonUI(out);
+      });
+    }
 
-      updateCopyButtonUI(out);
-    });
-  }
-
-  /* =========================
-   * Inline Styles (inject once)
-   * ========================= */
-  const styleId = 'grid-style-v12';
-  if (!document.getElementById(styleId)) {
-    const s = document.createElement('style');
-    s.id = styleId;
-    s.textContent = `
+    /* =========================
+     * Inline Styles (inject once)
+     * ========================= */
+    const styleId = 'grid-style-v12';
+    if (!document.getElementById(styleId)) {
+      const s = document.createElement('style');
+      s.id = styleId;
+      s.textContent = `
       .group > h3 { margin: 16px 0 10px; font-size: 16px; }
 
       /* Controls */
@@ -1000,8 +750,10 @@ function renderGrid(cached, opts = {}) {
         .grid-controls{ flex-wrap: wrap; gap: 10px; }
       }
     `;
-    document.head.appendChild(s);
+      document.head.appendChild(s);
+    }
   }
-}
 
-window.renderGrid = renderGrid;
+  window.renderGrid = renderGrid;
+
+})();

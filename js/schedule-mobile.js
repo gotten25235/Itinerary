@@ -1,8 +1,10 @@
 // filename: js/schedule-mobile.js
-// 手機/平板強制覆蓋版：提高權重、加 !important，確保生效
-// 通用：
-// - 行程（schedule-container 非 shopping-container）維持藍/紅/灰（has-plus/has-at）
-// - 採購清單（schedule-container.shopping-container）時間欄一律中性灰，不吃 has-plus/has-at
+// schedule-mobile.js（行程/採購清單的手機樣式覆蓋）
+// - 以較高權重與 !important 覆蓋 styles.css，確保在小螢幕穩定成型
+// - 版型：卡片兩欄（左：時間；右：內容與圖片）
+// - 顏色規則：
+//   - 行程（.schedule-container:not(.shopping-container)）：預設藍；未知時間 has-plus 為紅；has-at 為灰
+//   - 採購清單（.schedule-container.shopping-container）：時間欄固定中性灰，不受 has-plus/has-at 影響
 (function injectScheduleMobileStyles() {
   const id = 'schedule-mobile-style';
   const old = document.getElementById(id);
