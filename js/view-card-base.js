@@ -287,6 +287,23 @@
     /* 顯示模式：灰色 + 排最後（包含 2） */
     .schedule-item.is-gray{ opacity: .55; }
     .schedule-item.is-gray .schedule-time-section{ background:#9ca3af; }
+
+    /* ====== image modal (click image to zoom) ====== */
+    .no-scroll{ overflow:hidden; }
+    .img-modal{ position:fixed; inset:0; z-index:10000; display:none; }
+    .img-modal.show{ display:block; }
+    .img-modal-backdrop{ position:absolute; inset:0; background:rgba(0,0,0,.62); }
+    .img-modal-panel{
+      position:absolute; left:50%; top:50%;
+      transform:translate(-50%,-50%);
+      width:min(92vw, 980px);
+      max-height:88vh;
+      background:#111827;
+      border-radius:14px;
+      box-shadow:0 16px 44px rgba(0,0,0,.38);
+      overflow:hidden;
+      display:flex; align-items:center; justify-content:center;
+    }
     .img-modal-img{
       width:100%; height:100%;
       max-height:88vh;
