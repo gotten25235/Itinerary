@@ -18,9 +18,9 @@
  * - 2：grayBottom（灰色並排到最後；排序由各 view 控制）
  * - 3：requireCode1912（變數名保留歷史命名；實際 gate 為「需要 URL code 含 666」才顯示）
  *
- * URL code（支援逗號多值）：?code=1912,666
- * - 個人模式是否可見：由 handle.js 決策（依模式 + code set）
- * - Card 顯示模式=3：此 base 只檢查 code 是否包含「666」
+ * URL code：允許複數（例如 ?code=1912,666 或 ?code=1912%2C666）
+ * - 個人模式是否可見：由 handle.js / sheet-data.js 決策
+ * - Card 顯示模式=3：此 base 只要 URL code 內含「666」就顯示
  */
 
 (function () {
@@ -164,22 +164,25 @@
     });
   }
 
-  // 讀取 ?code=1912,666 這種逗號多值
-  function getCodeSet() {
+  function getCodeValue() {
     try {
       const p = new URLSearchParams(location.search);
-      const raw = String(p.get('code') || '').trim();
-      if (!raw) return new Set();
-      const parts = raw.split(/[,\s，]+/u).map(s => s.trim()).filter(Boolean);
-      return new Set(parts);
+      return String(p.get('code') || '').trim();
     } catch {
-      return new Set();
+      return '';
     }
   }
 
-  // Card 顯示模式=3：只認 666
+  function getCodeTokens() {
+    return getCodeValue()
+      .split(/[\s,，、;；]+/u)
+      .map((x) => String(x || '').trim())
+      .filter(Boolean);
+  }
+
+  // Card 顯示模式=3：只要 code 內含 666 即可顯示
   function hasCardCode666() {
-    return getCodeSet().has('666');
+    return getCodeTokens().includes('666');
   }
 
 
@@ -193,7 +196,7 @@
       hide: set.has('0'),
       strike: set.has('1'),
       grayBottom: set.has('2'),
-      requireCode1912: set.has('3'), // 顯示模式=3：需要 ?code=1912 才顯示
+      requireCode1912: set.has('3'), // 顯示模式=3：需要 ?code=666 才顯示
     };
   }
   function showToast(msg, ms) {

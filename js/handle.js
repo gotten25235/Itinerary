@@ -36,7 +36,7 @@ const AppState = {
   currentDocId: '',
 
   onePageMode: false,
-  onePageData: { gids: [], caches: [] },
+  onePageData: { sections: [] },
   onePageLoading: false,
 
   relatedAgenda: {
@@ -219,11 +219,14 @@ function renderCurrentView() {
     buildDayNavBar();
     updateOnePageButtonVisibility();
 
-    // 一頁式：不要顯示「相關議程」按鈕列（因為一頁式內容已經包含）
+    // 一頁式的 UI 切換集中在這裡處理，避免和 renderOnePageFromState() 重複收尾
     if (AppState.onePageMode) {
       const bar = document.getElementById('relatedAgendaBar');
-      if (bar) { bar.style.display = 'none'; bar.innerHTML = ''; }
-      AppState.relatedAgenda.returnTo = null; // 避免殘留「返回」
+      if (bar) {
+        bar.style.display = 'none';
+        bar.innerHTML = '';
+      }
+      if (AppState.relatedAgenda) AppState.relatedAgenda.returnTo = null;
       return renderOnePageFromState();
     }
 
@@ -257,8 +260,7 @@ function switchView(view) {
 
   // 一頁式僅適用於行程（schedule）；若切到其他視圖，自動回單日
   if (AppState.onePageMode && view !== 'schedule') {
-    AppState.onePageMode = false;
-    AppState.onePageData = { gids: [], caches: [] };
+    resetOnePageState();
   }
 
   AppState.currentView = view;
@@ -369,7 +371,5 @@ function main() {
 
   updateOnePageButtonVisibility();
 }
-
-main();
 
 main();

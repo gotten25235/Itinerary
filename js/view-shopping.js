@@ -55,9 +55,7 @@
   }
 
   function toast(msg) {
-    if (typeof U.showCopyToast === 'function') return U.showCopyToast(msg);
-    if (typeof B.showToast === 'function') return B.showToast(msg);
-    console.log('[toast]', msg);
+    return U.showCopyToast(msg);
   }
 
   function fnv1a32(str) {
@@ -533,10 +531,15 @@
 
     const param = window.AppState?.personalCodeParam || 'code';
     const expected = (window.AppState?.personalCodeValue || '1912').trim();
-    const p = new URLSearchParams(location.search);
-    const code = (p.get(param) || '').trim();
+    const ok = (typeof window.hasUrlCode === 'function')
+      ? window.hasUrlCode(expected, param)
+      : String(new URLSearchParams(location.search).get(param) || '')
+          .split(/[\s,，、;；]+/u)
+          .map((x) => String(x || '').trim())
+          .filter(Boolean)
+          .includes(expected);
 
-    if (!code || code !== expected) {
+    if (!ok) {
       return { ok: false, param, expected };
     }
     return { ok: true };
@@ -546,13 +549,7 @@
     const g = gatePersonalView();
     if (!g.ok) {
       const out = document.getElementById('out');
-      if (out) {
-        out.innerHTML =
-          `<div class="schedule-meta-note">
-             <div class="meta-label">需要授權：</div>
-             <div>此頁為「個人」視圖，請在網址帶入 <b>?${B.esc(g.param)}=${B.esc(g.expected)}</b> 才會顯示內容。</div>
-           </div>`;
-      }
+      if (out) out.innerHTML = '';
       const statusEl = document.getElementById('status');
       if (statusEl) statusEl.textContent = 'code 不正確，已隱藏個人視圖內容';
       return;

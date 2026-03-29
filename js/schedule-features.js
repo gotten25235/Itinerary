@@ -19,6 +19,12 @@ function ensureRelatedAgendaState() {
   return AppState.relatedAgenda;
 }
 
+function resetOnePageState(options = {}) {
+  AppState.onePageMode = false;
+  AppState.onePageData = { sections: [] };
+  if (options.clearLoading !== false) AppState.onePageLoading = false;
+}
+
 function ensureOnePageButton() {
   let btn = document.getElementById('onePageBtn');
   if (btn) return btn;
@@ -84,8 +90,7 @@ function updateOnePageButtonVisibility() {
   btn.disabled = !!AppState.onePageLoading;
 
   if (!shouldShow) {
-    AppState.onePageMode = false;
-    AppState.onePageData = { gids: [], caches: [] };
+    resetOnePageState({ clearLoading: false });
   }
 
   btn.textContent = AppState.onePageMode ? '回單日' : '一頁式';
@@ -101,11 +106,6 @@ function renderOnePageFromState() {
   const out = document.getElementById('out');
   const statusEl = document.getElementById('status');
   if (!out) return;
-
-  // 一頁式：不顯示「相關議程」按鈕列（避免從單日殘留）
-  const bar = document.getElementById('relatedAgendaBar');
-  if (bar) { bar.style.display = 'none'; bar.innerHTML = ''; }
-  ensureRelatedAgendaState().returnTo = null;
 
   hideDayNavBarForOnePage();
 
@@ -224,15 +224,11 @@ function renderOnePageFromState() {
     wrap.appendChild(day);
 
     const modeValue = getMetaValueCaseInsensitive(cached?.meta || {}, '模式') || '';
+    const modeFlags = parseModeFlags(modeValue);
     const t = classifyAgendaTypeByMode(modeValue);
 
-    // 增加更寬鬆的行程判斷邏輯（與單日模式的判斷標準一致）
-    const modeRaw = String(modeValue).trim();
-    const modeLower = modeRaw.toLowerCase();
-    const isSchedule = modeRaw === '行程' || modeLower.includes('行程') || /schedule/i.test(modeLower);
-
     // 優先判斷是否為行程
-    if (isSchedule && typeof window.renderSchedule === 'function') {
+    if (modeFlags.isSchedule && typeof window.renderSchedule === 'function') {
       renderInto(body, window.renderSchedule, cached);
       patchScheduleBlueTitle(body, cached);
     } 
@@ -283,18 +279,6 @@ async function fetchAllSchedulesForOnePage() {
   AppState.onePageLoading = true;
   updateOnePageButtonVisibility();
 
-  async function fetchOneByGid(gid) {
-    const url = template
-      ? buildUrlFromTemplate(template, gid)
-      : `https://docs.google.com/spreadsheets/d/${encodeURIComponent(docId)}/export?format=csv&gid=${encodeURIComponent(gid)}`;
-
-    const resp = await fetch(url, { cache: 'no-store', redirect: 'follow', credentials: 'omit', mode: 'cors' });
-    if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText} (gid=${gid})`);
-    const text = await resp.text();
-    const parsed = parseCsvTextToCached(text);
-    return { header: parsed.header, data: parsed.data, meta: parsed.meta, modeValue: parsed.modeValue };
-  }
-
   // 1) 載入總議程（依「模式」分類成 3 類；顯示順序固定）
   const masterBuckets = { personal_note: null, personal_shopping: null, note: null, shopping: null, other: [] };
   for (let i = 0; i < masterItems.length; i++) {
@@ -309,7 +293,7 @@ async function fetchAllSchedulesForOnePage() {
     }
 
     if (statusEl) statusEl.textContent = `一頁式載入總議程：${i + 1} / ${masterItems.length}（gid=${gid}）`;
-    const c = await fetchOneByGid(gid);
+    const c = await fetchParsedSheetByGid(gid, { template, docId });
 
     const t = classifyAgendaTypeByMode(c.modeValue);
 
@@ -328,7 +312,7 @@ async function fetchAllSchedulesForOnePage() {
   for (let i = 0; i < dayGids.length; i++) {
     const gid = dayGids[i];
     if (statusEl) statusEl.textContent = `一頁式載入日程表：${i + 1} / ${dayGids.length}（gid=${gid}）`;
-    const c = await fetchOneByGid(gid);
+    const c = await fetchParsedSheetByGid(gid, { template, docId });
     dayCaches.push({ gid, cached: c });
   }
 
@@ -358,8 +342,7 @@ async function toggleOnePageMode() {
 
   // 關閉：回到單日
   if (AppState.onePageMode) {
-    AppState.onePageMode = false;
-    AppState.onePageData = { gids: [], caches: [] };
+    resetOnePageState({ clearLoading: false });
     updateOnePageButtonVisibility();
     updateDebugSummaryContext();
     renderCurrentView();
@@ -377,13 +360,12 @@ async function toggleOnePageMode() {
     await fetchAllSchedulesForOnePage();
     AppState.onePageMode = true;
     updateOnePageButtonVisibility();
-    renderOnePageFromState();
+    renderCurrentView();
   } catch (e) {
     console.error('一頁式載入失敗：', e);
     logDebug(['[onePage] error', String(e.stack || e)]);
     if (statusEl) statusEl.textContent = '一頁式載入失敗（請看 Console / Debug）';
-    AppState.onePageMode = false;
-    AppState.onePageData = { gids: [], caches: [] };
+    resetOnePageState({ clearLoading: false });
   } finally {
     AppState.onePageLoading = false;
     updateOnePageButtonVisibility();
@@ -506,13 +488,6 @@ function buildDayNavBar() {
 
 
 /* ============ 單頁：相關議程按鈕（天數列上方） ============ */
-
-ensureRelatedAgendaState() = {
-  // 依 gid 內的「模式」分類：personal_note / personal_shopping / note / shopping
-  items: null,           // {personal_note:{gid}, personal_shopping:{gid}, note:{gid}, shopping:{gid}}
-  loading: false,
-  returnTo: null         // {gid, view}
-};
 
 function ensureRelatedAgendaBar() {
   let bar = document.getElementById('relatedAgendaBar');
@@ -651,24 +626,13 @@ async function hydrateRelatedAgenda() {
   const template = (tplEl?.value || '').trim();
   const docId = AppState.currentDocId || sanitizeDocId(DEFAULT_DOC_ID) || '';
 
-  async function fetchOneByGid(gid) {
-    const url = template
-      ? buildUrlFromTemplate(template, gid)
-      : `https://docs.google.com/spreadsheets/d/${encodeURIComponent(docId)}/export?format=csv&gid=${encodeURIComponent(gid)}`;
-
-    const resp = await fetch(url, { cache: 'no-store', redirect: 'follow', credentials: 'omit', mode: 'cors' });
-    if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText} (gid=${gid})`);
-    const text = await resp.text();
-    const parsed = parseCsvTextToCached(text);
-    return parsed.modeValue;
-  }
-
   try {
     const buckets = { personal_note: null, personal_shopping: null, note: null, shopping: null };
 
     for (const it of items) {
       if (!it.gid) continue;
-      const mode = await fetchOneByGid(it.gid);
+      const parsed = await fetchParsedSheetByGid(it.gid, { template, docId });
+      const mode = parsed.modeValue;
       const t = classifyAgendaTypeByMode(mode);
 
       if (t === 'personal_note' && !buckets.personal_note) buckets.personal_note = { gid: it.gid };

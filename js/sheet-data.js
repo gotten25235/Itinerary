@@ -149,11 +149,28 @@ function parseAgendaItemsFromMeta(meta, key) {
   });
 }
 
-function hasPersonalCode1912() {
+function getUrlCodeValue(param) {
   const p = new URLSearchParams(location.search);
-  const raw = String(p.get('code') || '').trim();
-  const set = new Set(raw.split(/[,\s，]+/u).map(s => s.trim()).filter(Boolean));
-  return set.has('1912');
+  return String(p.get(param || 'code') || '').trim();
+}
+
+function getUrlCodeTokens(param) {
+  return getUrlCodeValue(param || 'code')
+    .split(/[\s,，、;；]+/u)
+    .map((x) => String(x || '').trim())
+    .filter(Boolean);
+}
+
+
+function hasUrlCode(expected, param) {
+  const want = String(expected || '').trim();
+  if (!want) return false;
+  return getUrlCodeTokens(param || 'code').includes(want);
+}
+
+
+function hasPersonalCode1912() {
+  return hasUrlCode('1912', 'code');
 }
 
 
@@ -308,6 +325,51 @@ function buildUrlFromTemplate(template, gid) {
 }
 
 
+
+async function fetchParsedSheetByGid(gid, options = {}) {
+  const g = String(gid || '').trim();
+  if (!g) throw new Error('缺少 gid');
+
+  const template = String(options.template || '').trim();
+  const docId =
+    sanitizeDocId(options.docId) ||
+    sanitizeDocId(AppState?.currentDocId) ||
+    resolveActiveDocId(template);
+
+  if (!template && !docId) {
+    throw new Error('缺少 template 與 docId，無法載入 gid=' + g);
+  }
+
+  const url = buildUrlFromTemplate(template || `https://docs.google.com/spreadsheets/d/${encodeURIComponent(docId)}/export?format=csv&gid=${encodeURIComponent(g)}`, g);
+  const resp = await fetch(url, {
+    cache: 'no-store',
+    redirect: 'follow',
+    credentials: 'omit',
+    mode: 'cors'
+  });
+
+  const contentType = (resp.headers.get('content-type') || '').toLowerCase();
+  if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText} (gid=${g})`);
+
+  const text = await resp.text();
+  const isCsvCt = /(^|;) *text\/csv(;|$)/.test(contentType);
+  const likeDelimited = looksLikeDelimited(text);
+  const isHtmlLike =
+    /^\s*<!doctype html/i.test(text) ||
+    /^\s*<html/i.test(text) ||
+    text.toLowerCase().includes('<html');
+
+  if (isHtmlLike) {
+    throw new Error(`gid=${g} 回傳 HTML（可能是登入/權限頁或不是 CSV 端點）`);
+  }
+  if (!isCsvCt && !likeDelimited) {
+    throw new Error(`gid=${g} 回傳非 CSV 內容（content-type: ${contentType || 'unknown'}）`);
+  }
+
+  return parseCsvTextToCached(text);
+}
+
+
 /* ============ CSV 解析後載入 ============ */
 
 function parseDayGidsFromMeta(meta) {
@@ -327,7 +389,8 @@ function parseDayGidsFromMeta(meta) {
  */
 
 
-function decideViewsByMode(modeValue) {
+
+function parseModeFlags(modeValue) {
   const modeRaw = String(modeValue || '').trim();
   const mode = modeRaw.toLowerCase();
 
@@ -340,13 +403,28 @@ function decideViewsByMode(modeValue) {
   const isNote =
     modeRaw === '注意事項' || mode.includes('注意事項') || mode.includes('注意') || /note/i.test(modeRaw);
 
-  const isPersonal = mode.includes('個人');
+  const isPersonal = mode.includes('個人') || /personal/i.test(modeRaw);
 
   const isPersonalNote =
     modeRaw === '個人注意事項' || (isPersonal && mode.includes('注意')) || /personal\s*note/i.test(modeRaw);
 
   const isPersonalShopping =
     modeRaw === '個人採購清單' || (isPersonal && (mode.includes('採購') || mode.includes('購物'))) || /personal\s*shopping/i.test(modeRaw);
+
+  return {
+    modeRaw,
+    mode,
+    isSchedule,
+    isShopping,
+    isNote,
+    isPersonal,
+    isPersonalNote,
+    isPersonalShopping
+  };
+}
+
+function decideViewsByMode(modeValue) {
+  const flags = parseModeFlags(modeValue);
 
   const next = {
     noteRequireCode: false,
@@ -355,16 +433,16 @@ function decideViewsByMode(modeValue) {
     defaultView: 'grid'
   };
 
-  if (isPersonal) next.personalRequireCode = true;
-  if (isPersonalNote) next.noteRequireCode = true;
+  if (flags.isPersonal) next.personalRequireCode = true;
+  if (flags.isPersonalNote) next.noteRequireCode = true;
 
-  if (isSchedule) {
+  if (flags.isSchedule) {
     next.availableViews = ['schedule', 'list', 'raw'];
     next.defaultView = 'schedule';
-  } else if (isPersonalShopping || isShopping) {
+  } else if (flags.isPersonalShopping || flags.isShopping) {
     next.availableViews = ['shopping', 'list', 'raw'];
     next.defaultView = 'shopping';
-  } else if (isPersonalNote || isNote) {
+  } else if (flags.isPersonalNote || flags.isNote) {
     next.availableViews = ['note', 'list', 'raw'];
     next.defaultView = 'note';
   }
@@ -635,4 +713,33 @@ async function loadFromUrlTemplate() {
 
 // 從 meta 解析日程表的 gid 陣列
 
+/* ============ 明確匯出（避免依賴瀏覽器對全域函式的隱式掛載） ============ */
 
+window.looksLikeDelimited = looksLikeDelimited;
+window.extractGid = extractGid;
+window.extractDocId = extractDocId;
+window.sanitizeDocId = sanitizeDocId;
+window.getDocIdFromUrl = getDocIdFromUrl;
+window.isMetaRow = isMetaRow;
+window.getMetaValueCaseInsensitive = getMetaValueCaseInsensitive;
+window.parseAgendaItemsFromMeta = parseAgendaItemsFromMeta;
+window.getUrlCodeValue = getUrlCodeValue;
+window.getUrlCodeTokens = getUrlCodeTokens;
+window.hasUrlCode = hasUrlCode;
+window.hasPersonalCode1912 = hasPersonalCode1912;
+window.classifyAgendaTypeByMode = classifyAgendaTypeByMode;
+window.detectHeaderIndexForSchedule = detectHeaderIndexForSchedule;
+window.detectHeaderIndexHeuristic = detectHeaderIndexHeuristic;
+window.detectStandaloneTitleRow = detectStandaloneTitleRow;
+window.setSheetTitleToPage = setSheetTitleToPage;
+window.resolveActiveDocId = resolveActiveDocId;
+window.buildUrlFromTemplate = buildUrlFromTemplate;
+window.fetchParsedSheetByGid = fetchParsedSheetByGid;
+window.parseDayGidsFromMeta = parseDayGidsFromMeta;
+window.parseModeFlags = parseModeFlags;
+window.decideViewsByMode = decideViewsByMode;
+window.parseCsvTextToCached = parseCsvTextToCached;
+window.applyCachedToState = applyCachedToState;
+window.loadFromText = loadFromText;
+window.loadSampleData = loadSampleData;
+window.loadFromUrlTemplate = loadFromUrlTemplate;
