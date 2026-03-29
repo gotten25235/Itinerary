@@ -70,6 +70,7 @@
     const keyHours = B.pickField(header, ['營業時間', '營業時段', 'hours', 'opening hours', 'open hours']);
 
     const keyReviews = B.collectReviewKeys(header);
+    const keyShots = B.collectShotKeys(header);
     const keyImage = B.pickField(header, ['圖片', '圖片網址', '照片', 'image', 'img', 'thumbnail', 'photo', 'pic', '圖']);
     const keySummary = B.pickField(header, ['摘要', 'summary']);
     const keyNote = B.pickField(header, ['備註', 'note']);
@@ -86,6 +87,7 @@
       keyPriceNt,
       keyHours,
       keyReviews,
+      keyShots,
       keyImage,
       keySummary,
       keyNote,

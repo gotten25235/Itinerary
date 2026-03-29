@@ -101,6 +101,21 @@
     return out.filter((k, i) => out.indexOf(k) === i);
   }
 
+  function collectShotKeys(header = []) {
+    const keys = header.map(h => t(h)).filter(Boolean);
+    const out = [];
+  
+    for (const k of keys) {
+      const kl = k.toLowerCase();
+  
+      if (k === '拍攝' || /^拍攝\d+$/u.test(k)) { out.push(k); continue; }
+      if (kl === 'shot' || /^shot\d+$/.test(kl) || kl === 'shots') { out.push(k); continue; }
+      if (kl.includes('shot')) { out.push(k); continue; }
+    }
+  
+    return out.filter((k, i) => out.indexOf(k) === i);
+  }
+
   function firstImageUrl(value) {
     if (!value) return '';
     const parts = String(value).trim().split(/[\s,;\n\r]+/).filter(Boolean);
@@ -134,6 +149,18 @@
       const n = labelCount[base];
       const txt = (n === 1) ? base : `${base}${n}`;
       return { text: txt, url: x.url };
+    });
+  }
+
+  function buildShotButtons(urls) {
+    let count = 0;
+  
+    return urls.map((x) => {
+      count += 1;
+      return {
+        text: (count === 1) ? '拍' : `拍${count}`,
+        url: x.url
+      };
     });
   }
 
@@ -497,6 +524,15 @@
         const reviewButtons = buildReviewButtons(reviewUrlObjs);
         const firstReviewUrl = reviewUrlObjs.length ? reviewUrlObjs[0].url : '';
 
+        const shotUrlObjs = [];
+        if (keys.keyShots && keys.keyShots.length) {
+          keys.keyShots.forEach((k) => {
+            const u = normalizeUrl(row[k]);
+            if (u) shotUrlObjs.push({ url: u, key: k });
+          });
+        }
+        const shotButtons = buildShotButtons(shotUrlObjs);
+
         const img = keys.keyImage ? firstImageUrl(row[keys.keyImage]) : '';
 
         const derived = { siteUrl, firstReviewUrl, img };
@@ -618,14 +654,21 @@
         }
         html += `</div>`;
 
-        if (siteUrl || reviewButtons.length) {
+        if (siteUrl || reviewButtons.length || shotButtons.length) {
           html += `<div class="schedule-actions">`;
+        
           if (siteUrl) {
             html += `<a class="sched-btn" href="${esc(siteUrl)}" target="_blank" rel="noopener" title="官網" aria-label="官網">官</a>`;
           }
+        
           reviewButtons.forEach((b) => {
             html += `<a class="sched-btn" href="${esc(b.url)}" target="_blank" rel="noopener" title="評論" aria-label="評論">${esc(b.text)}</a>`;
           });
+        
+          shotButtons.forEach((b) => {
+            html += `<a class="sched-btn" href="${esc(b.url)}" target="_blank" rel="noopener" title="拍攝" aria-label="拍攝">${esc(b.text)}</a>`;
+          });
+        
           html += `</div>`;
         }
 
@@ -736,8 +779,10 @@
     pickField,
     normalizeUrl,
     collectReviewKeys,
+    collectShotKeys,
     firstImageUrl,
     buildReviewButtons,
+    buildShotButtons,
     parseDisplayModeFlags,
     showToast,
     createCardRenderer,
